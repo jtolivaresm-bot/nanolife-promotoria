@@ -10,6 +10,10 @@
 
 async function getToken(key, scope) {
   const k = JSON.parse(key);
+  // FIX: Netlify guarda \n como texto literal — restaurar saltos de línea reales
+  if (k.private_key && k.private_key.includes('\\n')) {
+    k.private_key = k.private_key.replace(/\\n/g, '\n');
+  }
   const b64 = s => btoa(s).replace(/\+/g,'-').replace(/\//g,'_').replace(/=/g,'');
   const header = b64(JSON.stringify({ alg:"RS256", typ:"JWT" }));
   const now = Math.floor(Date.now()/1000);
