@@ -10,7 +10,7 @@ const STORAGE_KEY = "nanolife_v5";
 
 // Stock actualizado al último viernes (unidades por producto por sala)
 // { pid: { gondola: N, bodega: N } }
-const STOCK_SALAS = {
+let STOCK_SALAS = {
   s01: { p1:{gondola:12,bodega:0},  p2:{gondola:8,bodega:0},  p3:{gondola:10,bodega:5},  p4:{gondola:6,bodega:0},  p5:{gondola:4,bodega:0}  },
   s02: { p1:{gondola:10,bodega:12}, p2:{gondola:10,bodega:8}, p3:{gondola:8,bodega:0},   p4:{gondola:8,bodega:4},  p5:{gondola:6,bodega:0}  },
   s03: { p1:{gondola:14,bodega:6},  p2:{gondola:12,bodega:0}, p3:{gondola:10,bodega:10}, p4:{gondola:8,bodega:0},  p5:{gondola:4,bodega:2}  },
@@ -32,7 +32,7 @@ const PRODUCTOS = [
 ];
 
 // productos: array de ids de los que están exhibidos en esa sala (todos si null)
-const SALAS = [
+let SALAS = [
   { id:"s01", codigo:"091", nombre:"Hiper Lider - Zenteno 21",              ciudad:"Antofagasta",  lat:-23.6524,lng:-70.3954, reponedor:null,                fono:null,            productos:null },
   { id:"s02", codigo:"089", nombre:"Hiper Lider - Talcahuano 9000",         ciudad:"Hualpén",      lat:-36.7882,lng:-73.0989, reponedor:"MARCELO BARRIENTOS", fono:"56934511141",   productos:null },
   { id:"s03", codigo:"",    nombre:"Hiper Lider - Francisco Aguirre", ciudad:"La Serena",    lat:-29.9045,lng:-71.2494, reponedor:"VALERIA OLIVA",      fono:"56990032325",   productos:null },
@@ -45,10 +45,12 @@ const SALAS = [
   { id:"s10", codigo:"120", nombre:"Hiper Lider - Gabriela Mistral",  ciudad:"Temuco",       lat:-38.7408,lng:-72.5990, reponedor:"ILSE DIAZ",          fono:"56991312037",   productos:null },
 ];
 
-const PROMOTORES = [
-  { id:"u1", nombre:"Camila Rojas",    salaId:"s07" },
-  { id:"u2", nombre:"Diego Fuentes",   salaId:"s08" },
-  { id:"u3", nombre:"Valentina Soto",  salaId:"s06" },
+// Promotores, Salas y Stock se cargan desde Google Sheets al abrir la app.
+// Estos valores son el fallback mientras carga (o si hay error de red).
+let PROMOTORES = [
+  { id:"u1", nombre:"Camila Rojas",  salaId:"s07" },
+  { id:"u2", nombre:"Diego Fuentes", salaId:"s08" },
+  { id:"u3", nombre:"Valentina Soto",salaId:"s06" },
 ];
 
 // categoria: "marca" | "limpiapisos" | "detergente"
@@ -295,6 +297,7 @@ function ShiftRing({ pct, size=86 }) {
 
 export default function App() {
   const [ready, setReady] = useState(false);
+  const [configVersion, setConfigVersion] = useState(0);
   const [db, setDb] = useState({ config:DEFAULT_CONFIG, records:{}, training:SEED_TRAINING });
   const [pid, setPid] = useState("u1");
   const [tab, setTab] = useState("inicio");
@@ -304,15 +307,36 @@ export default function App() {
   const fecha = todayISO();
 
   useEffect(()=>{
+    // Load local data immediately so the app is usable offline
     const d=loadDB();
     if(d) setDb({config:{...DEFAULT_CONFIG,...d.config},records:d.records||{},training:d.training||SEED_TRAINING});
     setReady(true);
+
+    // Load config from Google in background
+    fetch("/.netlify/functions/config-reader")
+      .then(r=>r.ok ? r.json() : Promise.reject(r.status))
+      .then(({promotores, salas, stock, training})=>{
+        if(promotores?.length) PROMOTORES.splice(0, PROMOTORES.length, ...promotores);
+        if(salas?.length)      SALAS.splice(0, SALAS.length, ...salas);
+        if(stock && Object.keys(stock).length) {
+          Object.keys(STOCK_SALAS).forEach(k=>delete STOCK_SALAS[k]);
+          Object.assign(STOCK_SALAS, stock);
+        }
+        // Update training from Drive if available
+        if(training?.length) {
+          setDb(prev=>({ ...prev, training }));
+        }
+        setConfigVersion(v=>v+1);
+      })
+      .catch(err=>console.warn("Config load failed (using defaults):", err));
   },[]);
 
   useEffect(()=>{ if(ready) saveDB(db); },[db,ready]);
 
-  const promotor = PROMOTORES.find(p=>p.id===pid);
-  const sala = SALAS.find(s=>s.id===promotor.salaId)||null;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const promotor = useMemo(()=>PROMOTORES.find(p=>p.id===pid)||PROMOTORES[0]||{id:pid,nombre:"Promotor",salaId:""},[pid,configVersion]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const sala = useMemo(()=>SALAS.find(s=>s.id===promotor?.salaId)||null,[promotor,configVersion]);
   const rid = `${pid}__${fecha}`;
   const rec = useMemo(()=>normalizeRec(db.records[rid],pid,fecha),[db.records,rid,pid,fecha]);
 
@@ -394,7 +418,7 @@ export default function App() {
           );})}
         </div>
 
-        {profileOpen && <ProfileSheet pid={pid} setPid={id=>{setPid(id);setProfileOpen(false);}} close={()=>setProfileOpen(false)}/>}
+        {profileOpen && <ProfileSheet pid={pid} setPid={id=>{setPid(id);setProfileOpen(false);}} close={()=>setProfileOpen(false)} promotores={PROMOTORES} salas={SALAS}/>}
         {coordOpen && <CoordinadorSheet db={db} setDb={setDb} fecha={fecha} close={()=>setCoordOpen(false)}/>}
       </div>
     </div>
@@ -980,76 +1004,72 @@ function AudioCierre({ rec, updateRec }) {
 }
 
 const CAT_CONFIG = {
-  marca:       { label:"Nanolife",                  color:"#1E3A6E", bg:"#EEF2FF" },
-  limpiapisos: { label:"Limpiapisos + Recarga",     color:"#0E6F76", bg:"#E4F4F1" },
-  detergente:  { label:"Detergente en Cápsulas",    color:"#7C3AED", bg:"#F5F3FF" },
+  marca:       { label:"Nanolife",               color:"#1E3A6E", bg:"#EEF2FF" },
+  limpiapisos: { label:"Limpiapisos + Recarga",  color:"#0E6F76", bg:"#E4F4F1" },
+  detergente:  { label:"Detergente en Cápsulas", color:"#7C3AED", bg:"#F5F3FF" },
 };
 
 function Capacitacion({ training }) {
   const [unifOpen, setUnifOpen] = useState(false);
   const cats = ["marca","limpiapisos","detergente"];
-  const icon = t => t==="video"?<Video size={17}/>:t==="pdf"?<FileText size={17}/>:<ImageIcon size={17}/>;
-
+  const icon = t => t==="video"?<Video size={17}/>:t==="pdf"?<FileText size={17}/>:t==="imagen"?<ImageIcon size={17}/>:<FileText size={17}/>;
+  const uniforme = training.find(m=>m.tipo==="uniforme");
+  const resto = training.filter(m=>m.tipo!=="uniforme");
+  function openItem(m) {
+    if (m.url) { window.open(m.url, "_blank"); return; }
+    if (m.tipo==="uniforme") setUnifOpen(true);
+  }
   return (
     <>
-      {/* Logo Nanolife header */}
       <div style={{display:"flex",justifyContent:"center",padding:"20px 0 4px"}}>
         <NanoLogo height={42}/>
       </div>
       <p className="muted" style={{fontSize:13,textAlign:"center",margin:"4px 12px 0"}}>
         Repasa estos contenidos antes y durante la campaña.
       </p>
-
+      {uniforme && (
+        <>
+          <div className="sec-title"><span style={{width:10,height:10,borderRadius:3,background:"#1E3A6E",display:"inline-block",flexShrink:0}}/> Presentación</div>
+          <button onClick={()=>openItem(uniforme)} style={{width:"100%",background:"#EEF2FF",border:"1px solid #1E3A6E22",borderRadius:16,padding:"14px",display:"flex",alignItems:"center",gap:12,cursor:"pointer",textAlign:"left",marginTop:10}}>
+            <div style={{width:52,height:52,borderRadius:11,background:"#1E3A6E",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><span style={{fontSize:24}}>👔</span></div>
+            <div style={{flex:1,minWidth:0}}>
+              <div style={{fontWeight:700,fontSize:14,color:"#1E3A6E"}}>{uniforme.titulo}</div>
+              <div className="muted" style={{fontSize:12.5,marginTop:2}}>{uniforme.desc}</div>
+            </div>
+            <ChevronRight size={18} color="#1E3A6E"/>
+          </button>
+        </>
+      )}
       {cats.map(cat => {
         const cfg = CAT_CONFIG[cat];
-        const items = training.filter(m=>m.categoria===cat);
+        const items = resto.filter(m=>m.categoria===cat);
         if(!items.length) return null;
         return (
           <div key={cat}>
-            <div className="sec-title">
-              <span style={{width:10,height:10,borderRadius:3,background:cfg.color,display:"inline-block",flexShrink:0}}/>
-              {cfg.label}
-            </div>
-            {items.map(m => {
-              if(m.tipo==="uniforme") return (
-                <button key={m.id} onClick={()=>setUnifOpen(true)}
-                  style={{width:"100%",background:cfg.bg,border:`1px solid ${cfg.color}22`,borderRadius:16,padding:"14px",display:"flex",alignItems:"center",gap:12,cursor:"pointer",textAlign:"left",marginTop:10}}>
-<div style={{width:52,height:52,borderRadius:11,background:"#1E3A6E",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><span style={{fontSize:22}}>👔</span></div>
-                  <div style={{flex:1,minWidth:0}}>
-                    <div style={{fontWeight:700,fontSize:14,color:cfg.color}}>{m.titulo}</div>
-                    <div className="muted" style={{fontSize:12.5,marginTop:2}}>{m.desc}</div>
-                  </div>
-                  <ChevronRight size={18} color={cfg.color}/>
-                </button>
-              );
-              return (
-                <div key={m.id} style={{background:cfg.bg,border:`1px solid ${cfg.color}22`,borderRadius:16,padding:"14px",display:"flex",alignItems:"center",gap:12,marginTop:10}}>
-                  <div style={{width:42,height:42,borderRadius:11,background:"white",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,color:cfg.color,boxShadow:"0 1px 4px rgba(0,0,0,.08)"}}>
-                    {icon(m.tipo)}
-                  </div>
-                  <div style={{flex:1,minWidth:0}}>
-                    <div style={{fontWeight:600,fontSize:13.5,color:cfg.color}}>{m.titulo}</div>
-                    <div className="muted" style={{fontSize:12,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",marginTop:2}}>{m.desc}</div>
-                  </div>
-                  <div style={{textAlign:"right",flexShrink:0}}>
-                    <span className="badge" style={{background:"white",color:cfg.color}}>{m.dur}</span>
-                    <div><ChevronRight size={17} color={cfg.color} style={{marginTop:5}}/></div>
-                  </div>
+            <div className="sec-title"><span style={{width:10,height:10,borderRadius:3,background:cfg.color,display:"inline-block",flexShrink:0}}/> {cfg.label}</div>
+            {items.map(m => (
+              <button key={m.id} onClick={()=>openItem(m)}
+                style={{width:"100%",background:cfg.bg,border:`1px solid ${cfg.color}22`,borderRadius:16,padding:"14px",display:"flex",alignItems:"center",gap:12,cursor:"pointer",textAlign:"left",marginTop:10}}>
+                <div style={{width:42,height:42,borderRadius:11,background:"white",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,color:cfg.color,boxShadow:"0 1px 4px rgba(0,0,0,.08)"}}>{icon(m.tipo)}</div>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontWeight:600,fontSize:13.5,color:cfg.color}}>{m.titulo}</div>
+                  <div className="muted" style={{fontSize:12,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",marginTop:2}}>{m.desc}</div>
                 </div>
-              );
-            })}
+                <ChevronRight size={17} color={cfg.color}/>
+              </button>
+            ))}
           </div>
         );
       })}
-
-      {unifOpen && (
+      {!training.length && <div className="empty" style={{marginTop:20}}>El coordinador aún no ha subido material de capacitación.</div>}
+      {unifOpen && !uniforme?.url && (
         <div className="scrim" onClick={()=>setUnifOpen(false)} style={{alignItems:"center",justifyContent:"center"}}>
           <div onClick={e=>e.stopPropagation()} style={{width:"calc(100% - 24px)",maxHeight:"90%",background:"#fff",borderRadius:22,overflow:"hidden",boxShadow:"0 20px 60px rgba(0,0,0,.3)"}}>
             <div style={{padding:"12px 16px",display:"flex",justifyContent:"space-between",alignItems:"center",borderBottom:"1px solid var(--line)"}}>
               <b>Uniforme y presentación</b>
               <button style={{background:"var(--bg)",border:"none",borderRadius:9,width:34,height:34,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}} onClick={()=>setUnifOpen(false)}><X size={18}/></button>
             </div>
-            <UniformeImg/>
+            <div style={{overflowY:"auto"}}><UniformeImg/></div>
           </div>
         </div>
       )}
@@ -1057,15 +1077,15 @@ function Capacitacion({ training }) {
   );
 }
 
-function ProfileSheet({ pid, setPid, close }) {
+function ProfileSheet({ pid, setPid, close, promotores, salas }) {
   return (
     <div className="scrim" onClick={close}>
       <div className="sheet" onClick={e=>e.stopPropagation()}>
         <div className="grab"/>
         <div className="sec-title" style={{marginTop:8}}>¿Quién eres?</div>
         <p className="muted" style={{fontSize:13,marginBottom:8}}>Selecciona tu nombre. Tu sala se asignará automáticamente.</p>
-        {PROMOTORES.map(p=>{
-          const sl = SALAS.find(s=>s.id===p.salaId);
+        {promotores.map(p=>{
+          const sl = salas.find(s=>s.id===p.salaId);
           return (
             <button key={p.id} className="card tight" onClick={()=>setPid(p.id)}
               style={{width:"100%",display:"flex",alignItems:"center",gap:12,cursor:"pointer",textAlign:"left",border:p.id===pid?"2px solid var(--mint-d)":"1px solid var(--line)"}}>
