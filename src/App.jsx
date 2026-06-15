@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import {
   Home, MapPin, GraduationCap, Clock, LogIn, LogOut,
   CheckCircle2, Circle, Camera, Mic, Square, Trash2, X,
-  AlertCircle, Store, Upload, FileText, Video, Image as ImageIcon,
+  AlertCircle, Store, FileText, Video, Image as ImageIcon,
   ChevronRight, RefreshCw, Crown, ShieldCheck, Phone
 } from "lucide-react";
 
@@ -481,19 +481,16 @@ function Inicio({ rec, comm, steps, doneCount, pct, fecha, sala, setTab, setTurn
       <div className="card" style={{padding:0,overflow:"hidden"}}>
         <div style={{padding:"10px 14px 6px",display:"flex",justifyContent:"space-between",alignItems:"center",borderBottom:"1px solid var(--line)"}}>
           <span style={{fontSize:12,fontWeight:600,color:"var(--muted)"}}>Actualizado al viernes {lf}</span>
-          <span style={{fontSize:11,color:"var(--muted)"}}>Góndola · Bodega</span>
+          <span style={{fontSize:11,color:"var(--muted)"}}>Unidades</span>
         </div>
         {prods.map((p,i)=>{
-          const s = stock[p.id] || {gondola:"—",bodega:"—"};
-          const hayBodega = typeof s.bodega === "number" && s.bodega > 0;
+          const s = stock[p.id];
+          const total = s ? (s.gondola||0) + (s.bodega||0) : null;
+          const cero = total === 0;
           return (
             <div key={p.id} className="stk-row" style={{borderBottom:i<prods.length-1?"1px solid var(--line)":undefined}}>
               <div className="stk-nm">{p.nombre}</div>
-              <div className="stk-vals">
-                <span className={s.gondola===0?"st-g0":"st-g"}>{s.gondola}</span>
-                <span style={{color:"var(--line)",fontWeight:300}}>·</span>
-                <span className={hayBodega?"st-b":"st-b0"}>{typeof s.bodega==="number"?s.bodega:"—"}</span>
-              </div>
+              <span className={cero?"st-g0":"st-g"}>{total ?? "—"}</span>
             </div>
           );
         })}
@@ -623,198 +620,175 @@ function Marcar({ rec, updateRec, sala, cfg, turno, comm }) {
 
   const fotosOk = prods.every(p=>tr.fotosProducto?.[p.id]);
 
+  // ENTRADA AM: primero fotos, luego marcar entrada
   if (turno==="am" && !tr.entrada) return (
-    <MarcarEntrada loading={loading} onMarcar={()=>marcar("entrada")} sala={sala}/>
+    <EntradaAM loading={loading} onMarcar={()=>marcar("entrada")}
+      sala={sala} tr={tr} prods={prods} updateRec={updateRec}/>
   );
-  if (turno==="am" && tr.entrada && !fotosOk) return (
-    <SoloFotos tr={tr} prods={prods} updateRec={updateRec} sala={sala}/>
+  // SALIDA AM: ventas + marcar salida
+  if (turno==="am" && tr.entrada && !tr.salida) return (
+    <SalidaConVentas tr={tr} tt={tt} loading={loading} onMarcar={()=>marcar("salida")}
+      prods={prods} updateRec={updateRec} turno="am" rec={rec} sala={sala} comm={comm} tipo="AM"/>
   );
-  if (turno==="am" && tr.entrada && fotosOk && !tr.salida) return (
-    <FotosYSalida tr={tr} tt={tt} loading={loading} onMarcar={()=>marcar("salida")}
-      prods={prods} updateRec={updateRec} turno={turno} rec={rec} sala={sala}/>
-  );
+  // ENTRADA PM: solo botón
   if (turno==="pm" && !tr.entrada) return (
     <MarcarEntrada loading={loading} onMarcar={()=>marcar("entrada")} sala={sala} tipo="PM"/>
   );
+  // SALIDA PM: ventas + audio + marcar salida
   if (turno==="pm" && tr.entrada && !tr.salida) return (
-    <VentasYSalida tr={tr} tt={tt} loading={loading} onMarcar={()=>marcar("salida")}
-      prods={prods} updateRec={updateRec} turno={turno} rec={rec} sala={sala} comm={comm}/>
+    <SalidaConVentas tr={tr} tt={tt} loading={loading} onMarcar={()=>marcar("salida")}
+      prods={prods} updateRec={updateRec} turno="pm" rec={rec} sala={sala} comm={comm} tipo="PM"/>
   );
   return <TurnoCerrado tr={tr} tt={tt} comm={comm} turno={turno} sala={sala} prods={prods}/>;
 }
 
-function MarcarEntrada({ loading, onMarcar, sala, tipo="AM" }) {
-  return (
-    <>
-      <div className="sec-title" style={{marginTop:16}}>Marcación entrada {tipo}</div>
-      <div className="card tight" style={{display:"flex",alignItems:"center",gap:10,background:"#E4F4F1",border:"none"}}>
-        <Store size={17} color="var(--teal)" style={{flexShrink:0}}/>
-        <div style={{flex:1}}>
-          <div style={{fontWeight:600,fontSize:13.5}}>{sala?.nombre}</div>
-          <div className="muted" style={{fontSize:12}}>{sala?.ciudad}{sala?.codigo?` · Sala ${sala.codigo}`:""}</div>
-        </div>
-      </div>
-      <div className="card" style={{marginTop:10}}>
-        <p className="muted" style={{fontSize:13,marginBottom:14}}>
-          {tipo==="AM"
-            ? "Marca tu entrada para comenzar el turno AM. Luego deberás fotografiar cada producto en góndola."
-            : "Marca tu entrada para comenzar el turno PM."}
-        </p>
-        <button className="btn btn-primary btn-block" disabled={loading} onClick={onMarcar}>
-          {loading?<RefreshCw size={18} className="spin"/>:<LogIn size={18}/>}
-          {loading?"Obteniendo ubicación…":`Marcar entrada ${tipo}`}
-        </button>
-      </div>
-    </>
-  );
-}
-
-/* Paso 2 AM: solo fotos de góndola — después de marcar entrada, antes de registrar ventas */
-function SoloFotos({ tr, prods, updateRec, sala }) {
+function EntradaAM({ loading, onMarcar, sala, tr, prods, updateRec }) {
   const fileRef = useRef(null);
   const prodRef = useRef(null);
   const [busy, setBusy] = useState(false);
-  const fotosOk = prods.every(p=>tr.fotosProducto?.[p.id]);
-  const fotosDone = prods.filter(p=>tr.fotosProducto?.[p.id]).length;
+  const fotosOk = prods.every(p => tr.fotosProducto?.[p.id]);
+  const fotosDone = prods.filter(p => tr.fotosProducto?.[p.id]).length;
 
-  function pickFoto(pid){ prodRef.current=pid; fileRef.current.value=""; fileRef.current.click(); }
-  async function onFile(e){
-    const f=e.target.files[0]; if(!f) return;
+  function pickFoto(pid) { prodRef.current = pid; fileRef.current.value = ""; fileRef.current.click(); }
+  async function onFile(e) {
+    const f = e.target.files[0]; if (!f) return;
     setBusy(true);
-    try{
-      const img=await compressImage(f);
-      updateRec(r=>({...r,turnos:{...r.turnos,am:{...r.turnos.am,fotosProducto:{...(r.turnos.am.fotosProducto||{}),[prodRef.current]:img}}}}));
-    }catch{}
+    try {
+      const img = await compressImage(f);
+      updateRec(r => ({ ...r, turnos: { ...r.turnos, am: { ...r.turnos.am, fotosProducto: { ...(r.turnos.am.fotosProducto || {}), [prodRef.current]: img } } } }));
+    } catch {}
     setBusy(false);
   }
-  function delFoto(pid){ updateRec(r=>({...r,turnos:{...r.turnos,am:{...r.turnos.am,fotosProducto:{...(r.turnos.am.fotosProducto||{}),[pid]:null}}}})); }
+  function delFoto(pid) { updateRec(r => ({ ...r, turnos: { ...r.turnos, am: { ...r.turnos.am, fotosProducto: { ...(r.turnos.am.fotosProducto || {}), [pid]: null } } } })); }
 
   return (
     <>
-      <div className="sec-title" style={{marginTop:16}}>Entrada AM registrada ✓</div>
-      <div className="card tight" style={{display:"flex",alignItems:"center",gap:10,background:"#E4F4F1",border:"none"}}>
-        <LogIn size={17} color="var(--teal)" style={{flexShrink:0}}/>
-        <div style={{flex:1}}>
-          <div style={{fontWeight:600,fontSize:14}}>Entrada AM · {hhmm(tr.entrada.ts)} hrs</div>
-          <GPSChip data={tr.entrada} sala={sala}/>
-        </div>
-        <CheckCircle2 size={18} color="var(--teal)"/>
-      </div>
-
-      <div className="sec-title">Fotos de góndola <span className="muted" style={{fontWeight:400}}>({fotosDone}/{prods.length})</span></div>
-      <p className="muted" style={{fontSize:13,margin:"4px 2px 10px"}}>
-        Fotografía cada producto en gondola. Cuando termines todas las fotos podrás registrar tus ventas y marcar la salida.
+      <div className="sec-title" style={{ marginTop: 16 }}>Fotos de góndola <span className="muted" style={{ fontWeight: 400 }}>({fotosDone}/{prods.length})</span></div>
+      <p className="muted" style={{ fontSize: 13, margin: "4px 2px 10px" }}>
+        Fotografía cada producto en góndola antes de marcar tu entrada.
       </p>
       <div className="pgrid">
-        {prods.map(p=>{
+        {prods.map(p => {
           const foto = tr.fotosProducto?.[p.id];
           return foto ? (
             <div className="ph" key={p.id}>
-              <img src={foto} alt={p.nombre}/>
+              <img src={foto} alt={p.nombre} />
               <span className="tag">{p.nombre.split(" ").slice(-1)[0]}</span>
-              <button className="del" onClick={()=>delFoto(p.id)}><X size={13}/></button>
+              <button className="del" onClick={() => delFoto(p.id)}><X size={13} /></button>
             </div>
           ) : (
-            <div className="ph ph-empty" key={p.id} onClick={()=>pickFoto(p.id)}>
-              <Camera size={20} color="var(--muted)"/>
-              <span>{p.nombre.split(" ").slice(0,2).join(" ")}</span>
+            <div className="ph ph-empty" key={p.id} onClick={() => pickFoto(p.id)}>
+              <Camera size={20} color="var(--muted)" />
+              <span>{p.nombre.split(" ").slice(0, 2).join(" ")}</span>
             </div>
           );
         })}
       </div>
-      {busy && <div className="muted" style={{fontSize:12,textAlign:"center",marginTop:8}}>Procesando…</div>}
-      <input ref={fileRef} type="file" accept="image/*" capture="environment" onChange={onFile} style={{display:"none"}}/>
-
-      {fotosOk ? (
-        <div className="card" style={{marginTop:12,background:"#E4F4F1",border:"none",display:"flex",alignItems:"center",gap:10}}>
-          <CheckCircle2 size={18} color="var(--teal)"/>
-          <span style={{fontSize:13,fontWeight:600,color:"var(--teal-d)"}}>¡Fotos completas! Cambia al selector de Turno AM para registrar ventas y marcar salida.</span>
-        </div>
-      ) : (
-        <div style={{display:"flex",gap:8,alignItems:"center",padding:"10px",background:"#FEF3E2",borderRadius:12,marginTop:10}}>
-          <AlertCircle size={15} color="var(--amber)"/>
-          <span style={{fontSize:13}}>Completa todas las fotos para continuar.</span>
-        </div>
-      )}
-    </>
-  );
-}
-
-/* Paso 3 AM: ventas + salida — solo aparece cuando las fotos están completas */
-function FotosYSalida({ tr, tt, loading, onMarcar, prods, updateRec, turno, rec, sala }) {
-  return (
-    <>
-      <div className="sec-title" style={{marginTop:16}}>Fotos de góndola ✓</div>
-      <div className="pgrid" style={{marginTop:6}}>
-        {prods.map(p=>{
-          const foto = tr.fotosProducto?.[p.id];
-          return foto ? (
-            <div className="ph" key={p.id}>
-              <img src={foto} alt={p.nombre}/>
-              <span className="tag">{p.nombre.split(" ").slice(-1)[0]}</span>
-            </div>
-          ) : null;
-        })}
-      </div>
-
-      <div className="sec-title">Ventas Turno AM</div>
-      <VentasForm tr={tr} prods={prods} updateRec={updateRec} turno="am"/>
-
-      <div className="sec-title">Marcar salida AM</div>
-      <div className="card">
-        <p className="muted" style={{fontSize:13,marginBottom:14}}>Registra tus ventas arriba y luego marca tu salida del turno AM.</p>
-        <button className="btn btn-coral btn-block" disabled={loading} onClick={onMarcar}>
-          {loading?<RefreshCw size={18} className="spin"/>:<LogOut size={18}/>}
-          {loading?"Obteniendo ubicación…":"Marcar salida AM"}
+      {busy && <div className="muted" style={{ fontSize: 12, textAlign: "center", marginTop: 8 }}>Procesando…</div>}
+      <input ref={fileRef} type="file" accept="image/*" capture="environment" onChange={onFile} style={{ display: "none" }} />
+      <div className="card" style={{ marginTop: 14 }}>
+        {!fotosOk && (
+          <div style={{ display: "flex", gap: 8, alignItems: "center", padding: "10px", background: "#FEF3E2", borderRadius: 10, marginBottom: 12 }}>
+            <AlertCircle size={15} color="var(--amber)" />
+            <span style={{ fontSize: 13 }}>Completa las {prods.length} fotos para poder marcar entrada.</span>
+          </div>
+        )}
+        <button className="btn btn-primary btn-block" disabled={loading || !fotosOk} onClick={onMarcar}>
+          {loading ? <RefreshCw size={18} className="spin" /> : <LogIn size={18} />}
+          {loading ? "Obteniendo ubicación…" : "Marcar entrada AM"}
         </button>
       </div>
     </>
   );
 }
 
-/* ventas + salida PM */
-function VentasYSalida({ tr, tt, loading, onMarcar, prods, updateRec, turno, rec, sala, comm }) {
+function MarcarEntrada({ loading, onMarcar, sala, tipo = "AM" }) {
+  return (
+    <>
+      <div className="sec-title" style={{ marginTop: 16 }}>Turno {tipo}</div>
+      <div className="card tight" style={{ display: "flex", alignItems: "center", gap: 10, background: "#E4F4F1", border: "none" }}>
+        <Store size={17} color="var(--teal)" style={{ flexShrink: 0 }} />
+        <div style={{ flex: 1 }}>
+          <div style={{ fontWeight: 600, fontSize: 13.5 }}>{sala?.nombre}</div>
+          <div className="muted" style={{ fontSize: 12 }}>{sala?.ciudad}{sala?.codigo ? ` · Sala ${sala.codigo}` : ""}</div>
+        </div>
+      </div>
+      <div className="card" style={{ marginTop: 10 }}>
+        <button className="btn btn-primary btn-block" disabled={loading} onClick={onMarcar}>
+          {loading ? <RefreshCw size={18} className="spin" /> : <LogIn size={18} />}
+          {loading ? "Obteniendo ubicación…" : `Marcar entrada ${tipo}`}
+        </button>
+      </div>
+    </>
+  );
+}
+
+/* SALIDA AM y PM: ventas + (audio si PM) + marcar salida */
+function SalidaConVentas({ tr, tt, loading, onMarcar, prods, updateRec, turno, rec, sala, comm, tipo }) {
   const sub = calcTurno(tr);
   return (
     <>
-      <div className="sec-title" style={{marginTop:16}}>Entrada PM registrada</div>
-      <div className="card tight" style={{display:"flex",alignItems:"center",gap:10}}>
-        <div style={{width:36,height:36,borderRadius:10,background:"#E4F4F1",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
-          <LogIn size={17} color="var(--teal)"/>
-        </div>
-        <div style={{flex:1}}>
-          <div style={{fontWeight:600,fontSize:14}}>Entrada PM · {hhmm(tr.entrada.ts)} hrs</div>
-          <GPSChip data={tr.entrada} sala={sala}/>
+      {/* Confirmación de entrada */}
+      <div className="card tight" style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 16, background: "#E4F4F1", border: "none" }}>
+        <CheckCircle2 size={17} color="var(--teal)" style={{ flexShrink: 0 }} />
+        <div style={{ flex: 1 }}>
+          <div style={{ fontWeight: 600, fontSize: 14 }}>Entrada {tipo} · {hhmm(tr.entrada.ts)} hrs</div>
+          <GPSChip data={tr.entrada} sala={sala} />
         </div>
       </div>
 
-      {sala?.reponedor && (
-        <div style={{background:"#F0FAF9",border:"1px solid var(--line)",borderRadius:14,padding:"12px 14px",marginTop:10,display:"flex",alignItems:"center",gap:12}}>
-          <Phone size={16} color="var(--teal)"/>
-          <div style={{flex:1,fontSize:13}}><b>{sala.reponedor}</b> · Reponedor de bodega</div>
-          <a href={`tel:+${sala.fono}`} style={{background:"var(--mint)",borderRadius:9,width:36,height:36,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,textDecoration:"none"}}><Phone size={16} color="var(--teal-d)"/></a>
+      {/* Fotos resumen (solo AM) */}
+      {tipo === "AM" && Object.keys(tr.fotosProducto || {}).length > 0 && (
+        <>
+          <div className="sec-title">Fotos de góndola ✓</div>
+          <div className="pgrid" style={{ marginTop: 6 }}>
+            {prods.map(p => {
+              const foto = tr.fotosProducto?.[p.id];
+              return foto ? (
+                <div className="ph" key={p.id}>
+                  <img src={foto} alt={p.nombre} />
+                  <span className="tag">{p.nombre.split(" ").slice(-1)[0]}</span>
+                </div>
+              ) : null;
+            })}
+          </div>
+        </>
+      )}
+
+      {/* Reponedor (PM) */}
+      {tipo === "PM" && sala?.reponedor && (
+        <div style={{ background: "#F0FAF9", border: "1px solid var(--line)", borderRadius: 14, padding: "12px 14px", marginTop: 12, display: "flex", alignItems: "center", gap: 12 }}>
+          <Phone size={16} color="var(--teal)" />
+          <div style={{ flex: 1, fontSize: 13 }}><b>{sala.reponedor}</b> · Reponedor de bodega</div>
+          <a href={`tel:+${sala.fono}`} style={{ background: "var(--mint)", borderRadius: 9, width: 36, height: 36, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, textDecoration: "none" }}><Phone size={16} color="var(--teal-d)" /></a>
         </div>
       )}
 
-      <div className="sec-title">Ventas Turno PM</div>
-      <VentasForm tr={tr} prods={prods} updateRec={updateRec} turno="pm"/>
+      {/* Ventas */}
+      <div className="sec-title">Ventas Turno {tipo}</div>
+      <VentasForm tr={tr} prods={prods} updateRec={updateRec} turno={turno} />
 
-      <div className="sec-title">Resumen del día</div>
-      <div className="card tight">
-        <LineaR l="Comisión AM" v={comm.am.base}/>
-        <LineaR l="Comisión PM" v={sub.base}/>
-        <div style={{borderTop:"1.5px solid var(--line)",marginTop:8,paddingTop:12,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-          <b>Total comisión</b>
-          <span className="amount" style={{fontSize:22,color:"var(--teal)"}}>{fmtCLP(comm.am.base+sub.base)}</span>
+      {/* Resumen comisión */}
+      {sub.unidades > 0 && (
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 4px 0" }}>
+          <span className="muted" style={{ fontSize: 13 }}>{sub.unidades} u · {fmtCLP(sub.ventasTotal)}</span>
+          <span className="amount" style={{ fontSize: 18, color: "var(--teal)" }}>{fmtCLP(sub.base)}</span>
         </div>
-      </div>
+      )}
 
-      <div className="sec-title">Marcar salida PM + Audio de cierre</div>
-      <AudioCierre rec={rec} updateRec={updateRec}/>
-      <div className="card" style={{marginTop:8}}>
+      {/* Audio (solo PM) */}
+      {tipo === "PM" && (
+        <>
+          <div className="sec-title">Audio de cierre</div>
+          <AudioCierre rec={rec} updateRec={updateRec} />
+        </>
+      )}
+
+      {/* Botón salida */}
+      <div className="card" style={{ marginTop: 12 }}>
         <button className="btn btn-coral btn-block" disabled={loading} onClick={onMarcar}>
-          {loading?<RefreshCw size={18} className="spin"/>:<LogOut size={18}/>}
-          {loading?"Obteniendo ubicación…":"Marcar salida PM"}
+          {loading ? <RefreshCw size={18} className="spin" /> : <LogOut size={18} />}
+          {loading ? "Obteniendo ubicación…" : `Marcar salida ${tipo}`}
         </button>
       </div>
     </>
@@ -929,7 +903,6 @@ function AudioCierre({ rec, updateRec }) {
   const [secs, setSecs] = useState(0);
   const [audioURL, setAudioURL] = useState(null);
   const mr=useRef(null), chunks=useRef([]), timer=useRef(null), startT=useRef(0);
-  const fileRef=useRef(null);
   const fmtS=s=>`${Math.floor(s/60)}:${String(s%60).padStart(2,"0")}`;
 
   async function startRec(){
@@ -945,7 +918,6 @@ function AudioCierre({ rec, updateRec }) {
           const dataUrl=ev.target.result;
           setAudioURL(URL.createObjectURL(blob));
           updateRec(r=>{
-            // Upload to Drive in background
             const prom=PROMOTORES.find(p=>p.id===r.promotorId)||{nombre:"Promotor"};
             const sala=SALAS.find(s=>s.id===prom.salaId);
             const fileName=`${r.fecha}_${prom.nombre.replace(/ /g,"_")}_cierre.webm`;
@@ -953,7 +925,6 @@ function AudioCierre({ rec, updateRec }) {
               method:"POST",headers:{"Content-Type":"application/json"},
               body:JSON.stringify({dataUrl,fileName,folderId:"1H_VkKpCwXnZISX-OAvhZnFF42uGRxwt2",mimeType:"audio/webm"})
             }).then(res=>res.json()).then(({webViewLink})=>{
-              // Save audio URL to Sheets Cierres
               const comm=calcDia(r);
               fetch("/.netlify/functions/sheets-append",{
                 method:"POST",headers:{"Content-Type":"application/json"},
@@ -973,37 +944,37 @@ function AudioCierre({ rec, updateRec }) {
       };
       m.start(); mr.current=m; startT.current=Date.now(); setSecs(0); setRecording(true);
       timer.current=setInterval(()=>setSecs(Math.floor((Date.now()-startT.current)/1000)),250);
-    }catch{ alert("No se pudo acceder al micrófono. Permite el acceso o sube un archivo."); }
+    }catch{ alert("No se pudo acceder al micrófono. Por favor permite el acceso al micrófono en tu navegador."); }
   }
   function stopRec(){ mr.current?.stop(); clearInterval(timer.current); setRecording(false); }
-  async function onAudioFile(e){
-    const f=e.target.files[0]; if(!f) return;
-    setAudioURL(URL.createObjectURL(f));
-    updateRec(r=>({...r,audio:{dur:0,ts:Date.now(),fileName:f.name}}));
-  }
   function clear(){ setAudioURL(null); updateRec(r=>({...r,audio:null})); }
 
   if(rec.audio) return (
     <div className="card tight" style={{display:"flex",alignItems:"center",gap:10}}>
       <div style={{width:40,height:40,borderRadius:12,background:"#E4F4F1",display:"flex",alignItems:"center",justifyContent:"center"}}><Mic size={19} color="var(--teal)"/></div>
-      <div style={{flex:1}}><div style={{fontWeight:600,fontSize:14}}>Mensaje grabado</div><div className="muted" style={{fontSize:12}}>{hhmm(rec.audio.ts)} hrs</div></div>
+      <div style={{flex:1}}>
+        <div style={{fontWeight:600,fontSize:14}}>Mensaje grabado ✓</div>
+        <div className="muted" style={{fontSize:12}}>{hhmm(rec.audio.ts)} hrs · {fmtS(rec.audio.dur||0)}</div>
+      </div>
+      {audioURL && <audio controls src={audioURL} style={{display:"none"}}/>}
       <button className="btn-ghost" style={{color:"var(--coral)"}} onClick={clear}><Trash2 size={16}/></button>
     </div>
   );
 
   return (
     <div className="card tight">
-      <p className="muted" style={{fontSize:13,marginBottom:12}}>Graba un mensaje de cierre contando cómo estuvo el turno.</p>
+      <p className="muted" style={{fontSize:13,marginBottom:12}}>
+        Graba un breve mensaje contando cómo estuvo el turno: afluencia, ventas, incidencias.
+      </p>
       {!recording ? (
-        <button className="btn btn-soft btn-block" onClick={startRec}><Mic size={18}/> Grabar mensaje de cierre</button>
+        <button className="btn btn-primary btn-block" onClick={startRec}>
+          <Mic size={18}/> Grabar mensaje de cierre
+        </button>
       ) : (
         <button className="btn btn-block" style={{background:"#FFEDEA",color:"var(--coral)"}} onClick={stopRec}>
-          <span className="rec-dot"/> Grabando {fmtS(secs)} · Detener <Square size={15}/>
+          <span className="rec-dot"/> Grabando {fmtS(secs)} · Toca para detener <Square size={15}/>
         </button>
       )}
-      <div style={{textAlign:"center",margin:"8px 0",fontSize:11.5,color:"var(--muted)"}}>o</div>
-      <button className="btn btn-out btn-block" onClick={()=>fileRef.current.click()}><Upload size={16}/> Subir archivo</button>
-      <input ref={fileRef} type="file" accept="audio/*" onChange={onAudioFile} style={{display:"none"}}/>
     </div>
   );
 }
@@ -1162,3 +1133,4 @@ function CoordinadorSheet({ db, setDb, fecha, close }) {
     </div>
   );
 }
+/* ENTRADA AM: fotos de góndola primero, luego botón marcar entrada */
