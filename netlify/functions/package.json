@@ -1,0 +1,9 @@
+{
+  "name": "nanolife-functions",
+  "version": "1.0.0",
+  "type": "module",
+  "dependencies": {
+    "google-auth-library": "^9.0.0",
+    "googleapis": "^140.0.0"
+  }
+}
