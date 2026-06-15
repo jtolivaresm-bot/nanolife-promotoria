@@ -1031,9 +1031,3 @@ function CoordinadorSheet({ db, setDb, fecha, close }) {
     </div>
   );
 }
-
-const CAT_CONFIG = {
-  marca:       { label:"Nanolife",                  color:"#1E3A6E", bg:"#EEF2FF" },
-  limpiapisos: { label:"Limpiapisos + Recarga",     color:"#0E6F76", bg:"#E4F4F1" },
-  detergente:  { label:"Detergente en Cápsulas",    color:"#7C3AED", bg:"#F5F3FF" },
-};
