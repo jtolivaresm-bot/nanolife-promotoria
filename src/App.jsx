@@ -535,23 +535,101 @@ function Marcar({ rec, updateRec, sala, cfg, turno, comm }) {
   const tr = rec.turnos[turno];
   const tt = TURNOS[turno];
 
-  const prods = sala?.productos
-    ? PRODUCTOS.filter(p=>sala.productos.includes(p.id))
-    : PRODUCTOS;
+  const stock = sala ? (STOCK_SALAS[sala.id] || {}) : {};
+  const prods = PRODUCTOS.filter(p => {
+    if (sala?.productos && !sala.productos.includes(p.id)) return false;
+    const s = stock[p.id];
+    if (!s) return true; // sin datos de stock, mostrar igual
+    return (s.gondola || 0) > 0;
+  });
 
   async function marcar(tipo) {
     setLoading(true);
     const gps = await getGPS();
     const stamp = { ts:Date.now(), ...(gps||{}) };
     if(gps) stamp.dist = haversine(gps.lat,gps.lng,sala.lat,sala.lng);
-    updateRec(r=>({...r, turnos:{...r.turnos,[turno]:{...r.turnos[turno],[tipo]:stamp}}}));
+
+    // Guardar localmente
+    let recActual;
+    updateRec(r=>{
+      recActual = {...r, turnos:{...r.turnos,[turno]:{...r.turnos[turno],[tipo]:stamp}}};
+      return recActual;
+    });
+
+    // Sincronizar con Google en background (no bloquea la UI)
+    const promotorObj = PROMOTORES.find(p=>p.id===recActual?.promotorId)||{nombre:"Promotor"};
+    try {
+      // Marcación → Sheets
+      await fetch("/.netlify/functions/sheets-append", {
+        method:"POST", headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({ sheet:"Marcaciones", row:{
+          fecha: todayISO(),
+          promotor: promotorObj.nombre,
+          sala: sala.nombre,
+          ciudad: sala.ciudad,
+          turno: turno.toUpperCase(),
+          tipo: tipo==="entrada"?"Entrada":"Salida",
+          hora: hhmm(stamp.ts),
+          lat: stamp.lat??"",
+          lng: stamp.lng??"",
+          acc: stamp.acc??"",
+          dist: stamp.dist??"",
+          enLocal: stamp.dist!=null && stamp.dist<=200 ? "Sí":"No",
+        }})
+      });
+
+      // Si es salida → registrar ventas en Sheets
+      if (tipo==="salida") {
+        const cantidades = recActual?.turnos?.[turno]?.cantidades || {};
+        const rows = PRODUCTOS.filter(p=>cantidades[p.id]>0).map(p=>({
+          fecha: todayISO(),
+          promotor: promotorObj.nombre,
+          sala: sala.nombre,
+          ciudad: sala.ciudad,
+          turno: turno.toUpperCase(),
+          producto: p.nombre,
+          unidades: cantidades[p.id],
+          precio: p.precio,
+          comisionUnit: p.comision,
+          comisionTotal: cantidades[p.id]*p.comision,
+        }));
+        if(rows.length>0) {
+          await fetch("/.netlify/functions/sheets-append", {
+            method:"POST", headers:{"Content-Type":"application/json"},
+            body: JSON.stringify({ sheet:"Ventas", rows })
+          });
+        }
+
+        // Fotos de góndola → Drive (solo salida AM)
+        if (turno==="am") {
+          const fotos = recActual?.turnos?.am?.fotosProducto || {};
+          for (const [pid, dataUrl] of Object.entries(fotos)) {
+            if (!dataUrl) continue;
+            const prod = PRODUCTOS.find(p=>p.id===pid);
+            const fileName = `${todayISO()}_${promotorObj.nombre.replace(/ /g,"_")}_${sala.codigo||sala.id}_${prod?.nombre.replace(/ /g,"_")}.jpg`;
+            fetch("/.netlify/functions/drive-upload", {
+              method:"POST", headers:{"Content-Type":"application/json"},
+              body: JSON.stringify({ dataUrl, fileName, folderId:"1SSaJ_YJIhiVouHUzxfU1n273tK_aR7D7" })
+            }).catch(()=>{});
+          }
+        }
+      }
+    } catch(e) {
+      console.error("Sync error:", e);
+    }
+
     setLoading(false);
   }
+
+  const fotosOk = prods.every(p=>tr.fotosProducto?.[p.id]);
 
   if (turno==="am" && !tr.entrada) return (
     <MarcarEntrada loading={loading} onMarcar={()=>marcar("entrada")} sala={sala}/>
   );
-  if (turno==="am" && tr.entrada && !tr.salida) return (
+  if (turno==="am" && tr.entrada && !fotosOk) return (
+    <SoloFotos tr={tr} prods={prods} updateRec={updateRec} sala={sala}/>
+  );
+  if (turno==="am" && tr.entrada && fotosOk && !tr.salida) return (
     <FotosYSalida tr={tr} tt={tt} loading={loading} onMarcar={()=>marcar("salida")}
       prods={prods} updateRec={updateRec} turno={turno} rec={rec} sala={sala}/>
   );
@@ -591,11 +669,13 @@ function MarcarEntrada({ loading, onMarcar, sala, tipo="AM" }) {
   );
 }
 
-function FotosYSalida({ tr, tt, loading, onMarcar, prods, updateRec, turno, rec, sala }) {
+/* Paso 2 AM: solo fotos de góndola — después de marcar entrada, antes de registrar ventas */
+function SoloFotos({ tr, prods, updateRec, sala }) {
   const fileRef = useRef(null);
   const prodRef = useRef(null);
   const [busy, setBusy] = useState(false);
   const fotosOk = prods.every(p=>tr.fotosProducto?.[p.id]);
+  const fotosDone = prods.filter(p=>tr.fotosProducto?.[p.id]).length;
 
   function pickFoto(pid){ prodRef.current=pid; fileRef.current.value=""; fileRef.current.click(); }
   async function onFile(e){
@@ -611,20 +691,21 @@ function FotosYSalida({ tr, tt, loading, onMarcar, prods, updateRec, turno, rec,
 
   return (
     <>
-      <div className="sec-title" style={{marginTop:16}}>Entrada AM registrada</div>
-      <div className="card tight" style={{display:"flex",alignItems:"center",gap:10}}>
-        <div style={{width:36,height:36,borderRadius:10,background:"#E4F4F1",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
-          <LogIn size={17} color="var(--teal)"/>
-        </div>
+      <div className="sec-title" style={{marginTop:16}}>Entrada AM registrada ✓</div>
+      <div className="card tight" style={{display:"flex",alignItems:"center",gap:10,background:"#E4F4F1",border:"none"}}>
+        <LogIn size={17} color="var(--teal)" style={{flexShrink:0}}/>
         <div style={{flex:1}}>
           <div style={{fontWeight:600,fontSize:14}}>Entrada AM · {hhmm(tr.entrada.ts)} hrs</div>
           <GPSChip data={tr.entrada} sala={sala}/>
         </div>
+        <CheckCircle2 size={18} color="var(--teal)"/>
       </div>
 
-      <div className="sec-title">Fotos de góndola</div>
-      <p className="muted" style={{fontSize:13,margin:"4px 2px 0"}}>Fotografía cada producto exhibido en la góndola antes de comenzar tu turno.</p>
-      <div className="pgrid" style={{marginTop:10}}>
+      <div className="sec-title">Fotos de góndola <span className="muted" style={{fontWeight:400}}>({fotosDone}/{prods.length})</span></div>
+      <p className="muted" style={{fontSize:13,margin:"4px 2px 10px"}}>
+        Fotografía cada producto en gondola. Cuando termines todas las fotos podrás registrar tus ventas y marcar la salida.
+      </p>
+      <div className="pgrid">
         {prods.map(p=>{
           const foto = tr.fotosProducto?.[p.id];
           return foto ? (
@@ -644,18 +725,48 @@ function FotosYSalida({ tr, tt, loading, onMarcar, prods, updateRec, turno, rec,
       {busy && <div className="muted" style={{fontSize:12,textAlign:"center",marginTop:8}}>Procesando…</div>}
       <input ref={fileRef} type="file" accept="image/*" capture="environment" onChange={onFile} style={{display:"none"}}/>
 
-      {!fotosOk && <div style={{display:"flex",gap:8,alignItems:"center",padding:"10px",background:"#FEF3E2",borderRadius:12,marginTop:8}}><AlertCircle size={15} color="var(--amber)"/><span style={{fontSize:13}}>Completa las fotos antes de cerrar el turno.</span></div>}
+      {fotosOk ? (
+        <div className="card" style={{marginTop:12,background:"#E4F4F1",border:"none",display:"flex",alignItems:"center",gap:10}}>
+          <CheckCircle2 size={18} color="var(--teal)"/>
+          <span style={{fontSize:13,fontWeight:600,color:"var(--teal-d)"}}>¡Fotos completas! Cambia al selector de Turno AM para registrar ventas y marcar salida.</span>
+        </div>
+      ) : (
+        <div style={{display:"flex",gap:8,alignItems:"center",padding:"10px",background:"#FEF3E2",borderRadius:12,marginTop:10}}>
+          <AlertCircle size={15} color="var(--amber)"/>
+          <span style={{fontSize:13}}>Completa todas las fotos para continuar.</span>
+        </div>
+      )}
+    </>
+  );
+}
+
+/* Paso 3 AM: ventas + salida — solo aparece cuando las fotos están completas */
+function FotosYSalida({ tr, tt, loading, onMarcar, prods, updateRec, turno, rec, sala }) {
+  return (
+    <>
+      <div className="sec-title" style={{marginTop:16}}>Fotos de góndola ✓</div>
+      <div className="pgrid" style={{marginTop:6}}>
+        {prods.map(p=>{
+          const foto = tr.fotosProducto?.[p.id];
+          return foto ? (
+            <div className="ph" key={p.id}>
+              <img src={foto} alt={p.nombre}/>
+              <span className="tag">{p.nombre.split(" ").slice(-1)[0]}</span>
+            </div>
+          ) : null;
+        })}
+      </div>
 
       <div className="sec-title">Ventas Turno AM</div>
       <VentasForm tr={tr} prods={prods} updateRec={updateRec} turno="am"/>
 
       <div className="sec-title">Marcar salida AM</div>
       <div className="card">
-        <button className="btn btn-coral btn-block" disabled={loading||!fotosOk} onClick={onMarcar}>
+        <p className="muted" style={{fontSize:13,marginBottom:14}}>Registra tus ventas arriba y luego marca tu salida del turno AM.</p>
+        <button className="btn btn-coral btn-block" disabled={loading} onClick={onMarcar}>
           {loading?<RefreshCw size={18} className="spin"/>:<LogOut size={18}/>}
           {loading?"Obteniendo ubicación…":"Marcar salida AM"}
         </button>
-        {!fotosOk && <p className="muted" style={{fontSize:11.5,textAlign:"center",marginTop:8}}>Debes completar las fotos para poder marcar la salida.</p>}
       </div>
     </>
   );
@@ -827,10 +938,37 @@ function AudioCierre({ rec, updateRec }) {
       chunks.current=[];
       const m=new MediaRecorder(stream);
       m.ondataavailable=e=>e.data.size&&chunks.current.push(e.data);
-      m.onstop=()=>{
+      m.onstop=async()=>{
         const blob=new Blob(chunks.current,{type:"audio/webm"});
-        setAudioURL(URL.createObjectURL(blob));
-        updateRec(r=>({...r,audio:{dur:secs,ts:Date.now()}}));
+        const reader=new FileReader();
+        reader.onload=async(ev)=>{
+          const dataUrl=ev.target.result;
+          setAudioURL(URL.createObjectURL(blob));
+          updateRec(r=>{
+            // Upload to Drive in background
+            const prom=PROMOTORES.find(p=>p.id===r.promotorId)||{nombre:"Promotor"};
+            const sala=SALAS.find(s=>s.id===prom.salaId);
+            const fileName=`${r.fecha}_${prom.nombre.replace(/ /g,"_")}_cierre.webm`;
+            fetch("/.netlify/functions/drive-upload",{
+              method:"POST",headers:{"Content-Type":"application/json"},
+              body:JSON.stringify({dataUrl,fileName,folderId:"1H_VkKpCwXnZISX-OAvhZnFF42uGRxwt2",mimeType:"audio/webm"})
+            }).then(res=>res.json()).then(({webViewLink})=>{
+              // Save audio URL to Sheets Cierres
+              const comm=calcDia(r);
+              fetch("/.netlify/functions/sheets-append",{
+                method:"POST",headers:{"Content-Type":"application/json"},
+                body:JSON.stringify({sheet:"Cierres",row:{
+                  fecha:r.fecha, promotor:prom.nombre,
+                  sala:sala?.nombre||"", ciudad:sala?.ciudad||"",
+                  comisionAM:comm.am.base, comisionPM:comm.pm.base,
+                  comisionTotalDia:comm.total, audioUrl:webViewLink||""
+                }})
+              }).catch(()=>{});
+            }).catch(()=>{});
+            return{...r,audio:{dur:secs,ts:Date.now()}};
+          });
+        };
+        reader.readAsDataURL(blob);
         stream.getTracks().forEach(t=>t.stop());
       };
       m.start(); mr.current=m; startT.current=Date.now(); setSecs(0); setRecording(true);
