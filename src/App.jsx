@@ -261,14 +261,7 @@ box-shadow:0 30px 70px -20px rgba(10,76,82,.45),0 0 0 1px rgba(14,111,118,.08);
 .rep-bar{background:#F0FAF9;border-top:1px solid var(--line);padding:12px 14px}.rep-txt{font-size:12px;color:var(--muted);display:flex;align-items:center;gap:6px;margin-bottom:6px}.rep-row{display:flex;align-items:center;justify-content:space-between;gap:10px}.rep-call{background:var(--mint);border-radius:11px;width:40px;height:40px;display:flex;align-items:center;justify-content:center;flex-shrink:0;text-decoration:none}`;
 
 function NanoLogo({height=30}){
-  const w = height * 3.2;
-  return (
-    <svg width={w} height={height} viewBox="0 0 320 100" style={{borderRadius:8}}>
-      <rect width="320" height="100" rx="14" fill="#2B3585"/>
-      <rect x="2" y="2" width="316" height="96" rx="12" fill="none" stroke="#9B9BB4" strokeWidth="3"/>
-      <text x="160" y="72" textAnchor="middle" fontFamily="Arial Black,sans-serif" fontWeight="900" fontSize="64" fill="#F5A623" letterSpacing="2">NANOLIFE</text>
-    </svg>
-  );
+  return <img src="/logo-nanolife.png" alt="Nanolife" style={{height:height, objectFit:"contain"}}/>;
 }
 
 function UniformeImg(){
@@ -338,7 +331,7 @@ export default function App() {
   if(!ready) return (
     <div className="nl-root"><style>{CSS}</style>
       <div className="nl-phone"><div className="splash">
-        <div className="brand"><div className="drop" style={{width:40,height:40,borderRadius:12}}><Package size={22}/></div></div>
+        <NanoLogo height={36}/>
         <RefreshCw className="spin" size={22} style={{color:"var(--teal)"}}/>
         <div className="muted disp" style={{fontSize:14}}>Cargando…</div>
       </div></div>
