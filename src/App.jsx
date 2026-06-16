@@ -682,7 +682,9 @@ function Inicio({ rec, comm, steps, doneCount, pct, fecha, sala, setTab, setTurn
         </div>
         {prods.map((p,i)=>{
           const s = stock[p.id];
-          const total = s ? (s.gondola||0) + (s.bodega||0) : null;
+          const total = s === undefined ? null
+            : typeof s === "number" ? s
+            : (s.gondola||0) + (s.bodega||0);
           const cero = total === 0;
           return (
             <div key={p.id} className="stk-row" style={{borderBottom:i<prods.length-1?"1px solid var(--line)":undefined}}>
@@ -843,11 +845,17 @@ function Marcar({ rec, updateRec, sala, cfg, turno, comm }) {
   const tt = TURNOS[turno];
 
   const stock = sala ? (STOCK_SALAS[sala.id] || {}) : {};
+  const getStockTotal = (s) => {
+    if (!s && s !== 0) return null;
+    if (typeof s === "number") return s;
+    return (s.gondola||0) + (s.bodega||0);
+  };
   const prods = PRODUCTOS.filter(p => {
     if (sala?.productos && !sala.productos.includes(p.id)) return false;
     const s = stock[p.id];
-    if (!s) return true; // sin datos de stock, mostrar igual
-    return (s.gondola || 0) > 0;
+    if (s === undefined || s === null) return true; // sin datos = mostrar
+    const total = getStockTotal(s);
+    return total === null || total > 0;
   });
 
   async function marcar(tipo) {
@@ -856,18 +864,23 @@ function Marcar({ rec, updateRec, sala, cfg, turno, comm }) {
     const stamp = { ts:Date.now(), ...(gps||{}) };
     if(gps) stamp.dist = haversine(gps.lat,gps.lng,sala.lat,sala.lng);
 
-    // Guardar localmente
-    let recActual;
-    updateRec(r=>{
-      recActual = {...r, turnos:{...r.turnos,[turno]:{...r.turnos[turno],[tipo]:stamp}}};
-      return recActual;
-    });
+    // Capturar fotos ANTES de updateRec (rec es el estado actual, tiene las fotos)
+    const fotosActuales = tipo==="salida" && turno==="am"
+      ? { ...rec.turnos.am.fotosProducto }
+      : {};
+    const cantidadesActuales = tipo==="salida"
+      ? { ...rec.turnos[turno].cantidades }
+      : {};
 
-    // Sincronizar con Google en background (no bloquea la UI)
-    const promotorObj = PROMOTORES.find(p=>p.id===recActual?.promotorId)||{nombre:"Promotor"};
+    // Guardar marcación localmente
+    updateRec(r=>({...r, turnos:{...r.turnos,[turno]:{...r.turnos[turno],[tipo]:stamp}}}));
+
+    // Promotor info
+    const promotorObj = pid==="udemo" ? PROMOTOR_DEMO : PROMOTORES.find(p=>p.id===pid)||{nombre:"Promotor"};
+
     try {
-      // Marcación → Sheets
-      await fetch("/.netlify/functions/sheets-append", {
+      // 1. Marcación → Sheets
+      const marcRes = await fetch("/.netlify/functions/sheets-append", {
         method:"POST", headers:{"Content-Type":"application/json"},
         body: JSON.stringify({ sheet:"Marcaciones", row:{
           fecha: todayISO(),
@@ -884,40 +897,51 @@ function Marcar({ rec, updateRec, sala, cfg, turno, comm }) {
           enLocal: stamp.dist!=null && stamp.dist<=200 ? "Sí":"No",
         }})
       });
+      if(!marcRes.ok) console.error("Sheets marcacion error:", await marcRes.text());
 
-      // Si es salida → registrar ventas en Sheets
       if (tipo==="salida") {
-        const cantidades = recActual?.turnos?.[turno]?.cantidades || {};
-        const rows = PRODUCTOS.filter(p=>cantidades[p.id]>0).map(p=>({
+        // 2. Ventas → Sheets
+        const rows = PRODUCTOS.filter(p=>cantidadesActuales[p.id]>0).map(p=>({
           fecha: todayISO(),
           promotor: promotorObj.nombre,
           sala: sala.nombre,
           ciudad: sala.ciudad,
           turno: turno.toUpperCase(),
           producto: p.nombre,
-          unidades: cantidades[p.id],
+          unidades: cantidadesActuales[p.id],
           precio: p.precio,
           comisionUnit: p.comision,
-          comisionTotal: cantidades[p.id]*p.comision,
+          comisionTotal: cantidadesActuales[p.id]*p.comision,
         }));
         if(rows.length>0) {
-          await fetch("/.netlify/functions/sheets-append", {
+          const ventasRes = await fetch("/.netlify/functions/sheets-append", {
             method:"POST", headers:{"Content-Type":"application/json"},
             body: JSON.stringify({ sheet:"Ventas", rows })
           });
+          if(!ventasRes.ok) console.error("Sheets ventas error:", await ventasRes.text());
         }
 
-        // Fotos de góndola → Drive (solo salida AM)
+        // 3. Fotos → Drive (solo salida AM, usando fotos capturadas antes del updateRec)
         if (turno==="am") {
-          const fotos = recActual?.turnos?.am?.fotosProducto || {};
-          for (const [pid, dataUrl] of Object.entries(fotos)) {
-            if (!dataUrl) continue;
-            const prod = PRODUCTOS.find(p=>p.id===pid);
-            const fileName = `${todayISO()}_${promotorObj.nombre.replace(/ /g,"_")}_${sala.codigo||sala.id}_${prod?.nombre.replace(/ /g,"_")}.jpg`;
-            fetch("/.netlify/functions/drive-upload", {
-              method:"POST", headers:{"Content-Type":"application/json"},
-              body: JSON.stringify({ dataUrl, fileName, folderId:"1SSaJ_YJIhiVouHUzxfU1n273tK_aR7D7" })
-            }).catch(()=>{});
+          const fotoEntries = Object.entries(fotosActuales).filter(([,v])=>v);
+          console.log(`Subiendo ${fotoEntries.length} fotos a Drive...`);
+          for (const [prodId, dataUrl] of fotoEntries) {
+            const prod = PRODUCTOS.find(p=>p.id===prodId);
+            const fileName = `${todayISO()}_${promotorObj.nombre.replace(/ /g,"_")}_${sala.codigo||sala.id}_${(prod?.nombre||prodId).replace(/ /g,"_")}.jpg`;
+            try {
+              const fotoRes = await fetch("/.netlify/functions/drive-upload", {
+                method:"POST", headers:{"Content-Type":"application/json"},
+                body: JSON.stringify({ dataUrl, fileName, folderId:"1SSaJ_YJIhiVouHUzxfU1n273tK_aR7D7" })
+              });
+              if(fotoRes.ok) {
+                const {fileId} = await fotoRes.json();
+                console.log(`✓ Foto subida: ${fileName} (${fileId})`);
+              } else {
+                console.error(`✗ Error foto ${fileName}:`, await fotoRes.text());
+              }
+            } catch(e) {
+              console.error(`✗ Error foto ${fileName}:`, e.message);
+            }
           }
         }
       }
@@ -1065,26 +1089,9 @@ function SalidaConVentas({ tr, tt, loading, onMarcar, prods, updateRec, turno, r
         </>
       )}
 
-      {/* Reponedor (PM) */}
-      {tipo === "PM" && sala?.reponedor && (
-        <div style={{ background: "#F0FAF9", border: "1px solid var(--line)", borderRadius: 14, padding: "12px 14px", marginTop: 12, display: "flex", alignItems: "center", gap: 12 }}>
-          <Phone size={16} color="var(--teal)" />
-          <div style={{ flex: 1, fontSize: 13 }}><b>{sala.reponedor}</b> · Reponedor de bodega</div>
-          <a href={`tel:+${sala.fono}`} style={{ background: "var(--mint)", borderRadius: 9, width: 36, height: 36, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, textDecoration: "none" }}><Phone size={16} color="var(--teal-d)" /></a>
-        </div>
-      )}
-
       {/* Ventas */}
       <div className="sec-title">Ventas Turno {tipo}</div>
       <VentasForm tr={tr} prods={prods} updateRec={updateRec} turno={turno} />
-
-      {/* Resumen comisión */}
-      {sub.unidades > 0 && (
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 4px 0" }}>
-          <span className="muted" style={{ fontSize: 13 }}>{sub.unidades} u · {fmtCLP(sub.ventasTotal)}</span>
-          <span className="amount" style={{ fontSize: 18, color: "var(--teal)" }}>{fmtCLP(sub.base)}</span>
-        </div>
-      )}
 
       {/* Audio (solo PM) */}
       {tipo === "PM" && (
@@ -1145,7 +1152,14 @@ function TurnoCerrado({ tr, tt, comm, turno, sala, prods }) {
 
 function GPSChip({ data, sala }) {
   if(!data?.lat) return <span className="muted" style={{fontSize:11.5,display:"flex",alignItems:"center",gap:4}}><AlertCircle size={11}/> Sin GPS</span>;
-  const enLocal = sala && data.dist!=null && data.dist<=(200);
+  const esDemo = sala?.id==="sdemo";
+  const tolerancia = esDemo ? 999999 : 200;
+  const enLocal = sala && data.dist!=null && data.dist<=tolerancia;
+  if (esDemo) return (
+    <span className="chip chip-ok" style={{marginTop:2,fontSize:11}}>
+      <CheckCircle2 size={12}/> En el local (demo)
+    </span>
+  );
   return (
     <span className={`chip ${enLocal?"chip-ok":"chip-warn"}`} style={{marginTop:2,fontSize:11}}>
       {enLocal?<CheckCircle2 size={12}/>:<AlertCircle size={12}/>}
