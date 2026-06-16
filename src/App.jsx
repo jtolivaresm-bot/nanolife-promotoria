@@ -463,7 +463,7 @@ export default function App() {
 
         {/* SCREENS */}
         <div className="nl-screen">
-          {tab==="inicio"   && <Inicio   rec={rec} comm={comm} steps={steps} doneCount={doneCount} pct={pct} fecha={fecha} sala={sala} setTab={setTab} setTurno={setTurno}/>}
+          {tab==="inicio"   && <Inicio   rec={rec} comm={comm} steps={steps} doneCount={doneCount} pct={pct} fecha={fecha} sala={sala} setTab={setTab} setTurno={setTurno} pid={pid} db={db}/>}
           {tab==="marcar"   && <Marcar   rec={rec} updateRec={updateRec} sala={sala} cfg={db.config} turno={turno} comm={comm}/>}
           {tab==="capacita" && <Capacitacion training={db.training}/>}
         </div>
@@ -483,13 +483,47 @@ export default function App() {
   );
 }
 
-function Inicio({ rec, comm, steps, doneCount, pct, fecha, sala, setTab, setTurno }) {
+function Inicio({ rec, comm, steps, doneCount, pct, fecha, sala, setTab, setTurno, pid, db }) {
   const fechaTxt = new Date(fecha+"T12:00").toLocaleDateString("es-CL",{weekday:"long",day:"numeric",month:"long"});
   const go = (k) => { setTurno(k); setTab("marcar"); };
   const stock = sala ? (STOCK_SALAS[sala.id] || {}) : {};
   const prods = sala?.productos ? PRODUCTOS.filter(p=>sala.productos.includes(p.id)) : PRODUCTOS;
-
   const lf=(()=>{const d=new Date(),day=d.getDay();d.setDate(d.getDate()-((day===0?2:day===6?1:day-5+7)%7||7));return d.toLocaleDateString("es-CL",{day:"numeric",month:"long"});})();
+
+  // Calcular jornadas comprometidas del mes actual
+  const promotorObj = pid==="udemo" ? PROMOTOR_DEMO : PROMOTORES.find(p=>p.id===pid);
+  const meses = ["jan","feb","mar","apr","may","jun","jul","aug","sep","oct","nov","dec"];
+  const hoy = new Date();
+  const mesActualNum = hoy.getMonth(); // 0-11
+  const anioActual = hoy.getFullYear();
+
+  const jornadasComprometidas = promotorObj ? Object.entries(promotorObj)
+    .filter(([k,v]) => k.startsWith("salaId_") && v)
+    .map(([k,v]) => {
+      // key: salaId_19jun → dia=19, mes="jun"
+      const match = k.match(/salaId_(\d{2})([a-z]{3})/);
+      if (!match) return null;
+      const dia = parseInt(match[1]);
+      const mesIdx = meses.indexOf(match[2]);
+      if (mesIdx === -1) return null;
+      // Solo mostrar del mes actual
+      if (mesIdx !== mesActualNum) return null;
+      const fechaJornada = `${anioActual}-${String(mesIdx+1).padStart(2,"0")}-${String(dia).padStart(2,"0")}`;
+      const salaJornada = SALAS.find(s=>s.id===v);
+      const esHoy = fechaJornada === fecha;
+      const esPasado = fechaJornada < fecha;
+      const recJornada = db.records?.[`${pid}__${fechaJornada}`];
+      const recNorm = recJornada ? normalizeRec(recJornada, pid, fechaJornada) : null;
+      const amOk = !!recNorm?.turnos?.am?.entrada && !!recNorm?.turnos?.am?.salida;
+      const pmOk = !!recNorm?.turnos?.pm?.entrada && !!recNorm?.turnos?.pm?.salida;
+      const completada = amOk && pmOk;
+      return { fechaJornada, dia, mesIdx, salaJornada, esHoy, esPasado, completada, amOk, pmOk };
+    })
+    .filter(Boolean)
+    .sort((a,b) => a.fechaJornada.localeCompare(b.fechaJornada))
+  : [];
+
+  const fmtFechaJornada = (f) => new Date(f+"T12:00").toLocaleDateString("es-CL",{weekday:"long",day:"numeric",month:"long"});
 
   const TurnoMini = ({k}) => {
     const tt=TURNOS[k], tr=rec.turnos[k], c=comm[k];
@@ -528,22 +562,86 @@ function Inicio({ rec, comm, steps, doneCount, pct, fecha, sala, setTab, setTurn
         </div>
       )}
 
-      {/* SALA ASIGNADA */}
-      {sala && <div style={{background:"var(--surface)",border:"1px solid var(--line)",borderRadius:16,padding:"14px",marginTop:10,display:"flex",alignItems:"center",gap:12}}>
-        <div style={{width:40,height:40,borderRadius:11,background:"#E4F4F1",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
-          <Store size={19} color="var(--teal)"/>
+      {/* JORNADAS COMPROMETIDAS DEL MES */}
+      {jornadasComprometidas.length > 0 && (
+        <>
+          <div className="sec-title">Mis jornadas este mes</div>
+          <div className="card" style={{padding:0,overflow:"hidden"}}>
+            {jornadasComprometidas.map((j,i) => {
+              const borderColor = j.esHoy ? "var(--teal)" : j.completada ? "#16A34A" : j.esPasado ? "var(--coral)" : "var(--line)";
+              const bg = j.esHoy ? "#E4F4F1" : j.completada ? "#F0FDF4" : "var(--surface)";
+              return (
+                <div key={j.fechaJornada} style={{
+                  display:"flex", alignItems:"flex-start", gap:12,
+                  padding:"12px 14px",
+                  borderBottom: i<jornadasComprometidas.length-1 ? "1px solid var(--line)" : undefined,
+                  borderLeft: `3px solid ${borderColor}`,
+                  background: bg,
+                }}>
+                  {/* Icono estado */}
+                  <div style={{flexShrink:0, marginTop:2}}>
+                    {j.completada
+                      ? <CheckCircle2 size={18} color="#16A34A"/>
+                      : j.esHoy
+                      ? <MapPin size={18} color="var(--teal)"/>
+                      : j.esPasado && !j.completada
+                      ? <AlertCircle size={18} color="var(--coral)"/>
+                      : <Circle size={18} color="var(--muted)"/>
+                    }
+                  </div>
+                  <div style={{flex:1, minWidth:0}}>
+                    <div style={{display:"flex", alignItems:"center", gap:8, flexWrap:"wrap"}}>
+                      <div style={{fontWeight:700, fontSize:13.5, textTransform:"capitalize", color: j.esHoy?"var(--teal-d)":"var(--ink)"}}>
+                        {fmtFechaJornada(j.fechaJornada)}
+                        {j.esHoy && <span style={{fontSize:11,background:"var(--teal)",color:"#fff",borderRadius:6,padding:"1px 7px",marginLeft:8,fontWeight:600}}>HOY</span>}
+                      </div>
+                    </div>
+                    <div className="muted" style={{fontSize:12, marginTop:3, display:"flex", alignItems:"center", gap:4}}>
+                      <Store size={11}/>
+                      {j.salaJornada?.nombre || "Sala por confirmar"}
+                    </div>
+                    {j.salaJornada?.ciudad && (
+                      <div className="muted" style={{fontSize:11.5, marginTop:1}}>
+                        {j.salaJornada.ciudad}{j.salaJornada.codigo ? ` · Sala ${j.salaJornada.codigo}` : ""}
+                      </div>
+                    )}
+                    {/* Chips AM/PM si ya trabajó ese día */}
+                    {(j.amOk || j.pmOk) && (
+                      <div style={{display:"flex", gap:6, marginTop:5}}>
+                        <span className={`chip ${j.amOk?"chip-ok":"chip-off"}`} style={{fontSize:10,padding:"2px 7px"}}>AM {j.amOk?"✓":"—"}</span>
+                        <span className={`chip ${j.pmOk?"chip-ok":"chip-off"}`} style={{fontSize:10,padding:"2px 7px"}}>PM {j.pmOk?"✓":"—"}</span>
+                      </div>
+                    )}
+                  </div>
+                  {/* Pago estimado */}
+                  <div style={{flexShrink:0, textAlign:"right"}}>
+                    <div className="amount" style={{fontSize:13, color: j.completada ? "#16A34A" : "var(--muted)"}}>
+                      {j.completada ? fmtCLP(PAGO_JORNADA) : j.esPasado && !j.completada ? "Incompleta" : fmtCLP(PAGO_JORNADA)}
+                    </div>
+                    <div className="muted" style={{fontSize:10.5}}>jornada</div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </>
+      )}
+      {/* SALA ASIGNADA HOY */}
+      {sala && (
+        <div style={{background:"var(--surface)",border:"1px solid var(--line)",borderRadius:16,padding:"14px",marginTop:10,display:"flex",alignItems:"center",gap:12}}>
+          <div style={{width:40,height:40,borderRadius:11,background:"#E4F4F1",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+            <Store size={19} color="var(--teal)"/>
+          </div>
+          <div style={{flex:1}}>
+            <div className="eyebrow" style={{marginBottom:3}}>Sala asignada hoy</div>
+            <div style={{fontWeight:700,fontSize:14,lineHeight:1.25}}>{sala?.nombre || "—"}</div>
+            <div className="muted" style={{fontSize:12,marginTop:1}}>{sala?.ciudad}{sala?.codigo ? ` · Sala ${sala.codigo}` : ""}</div>
+          </div>
         </div>
-        <div style={{flex:1}}>
-          <div className="eyebrow" style={{marginBottom:3}}>Sala asignada</div>
-          <div style={{fontWeight:700,fontSize:14,lineHeight:1.25}}>{sala?.nombre || "—"}</div>
-          <div className="muted" style={{fontSize:12,marginTop:1}}>{sala?.ciudad}{sala?.codigo ? ` · Sala ${sala.codigo}` : ""}</div>
-        </div>
-      </div>}
+      )}
 
       {/* TODO LO SIGUIENTE SOLO SI HAY JORNADA HOY */}
       {sala && <>
-
-      {/* JORNADA RING */}
       <div className="card">
         <div className="ring-wrap">
           <div style={{position:"relative"}}>
