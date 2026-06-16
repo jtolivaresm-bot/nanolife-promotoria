@@ -1200,11 +1200,10 @@ function LoginScreen({ promotores, salas, onLogin, configVersion }) {
             {promotores.length === 0 && (
               <div className="empty">Cargando promotores… <br/><span style={{fontSize:12}}>Si esto demora, verifica la conexión.</span></div>
             )}
-            {[...promotores.filter(p=>!p._esDemo), ...(promotores.find(p=>p._esDemo) ? [] : [PROMOTOR_DEMO])].map((p,idx,arr)=>{
+            {[...promotores.filter(p=>p.id!=="udemo" && !p._esDemo), PROMOTOR_DEMO].map((p,idx,arr)=>{
               const sl = salas.find(s=>s.id===getSalaIdParaHoy(p));
               const isDemo = p._esDemo || p.id==="udemo";
-              // Separador antes del demo
-              const showSep = isDemo && arr.filter(x=>!x._esDemo && x.id!=="udemo").length > 0;
+              const showSep = isDemo && idx > 0;
               return (
                 <div key={p.id}>
                   {showSep && (
@@ -1216,14 +1215,14 @@ function LoginScreen({ promotores, salas, onLogin, configVersion }) {
                   )}
                   <button onClick={()=>handleSelectNombre(p.id)}
                     style={{width:"100%",background:isDemo?"#FFF8E7":"var(--surface)",border:isDemo?"1.5px dashed #F5A623":"1px solid var(--line)",borderRadius:16,padding:"14px 16px",display:"flex",alignItems:"center",gap:12,cursor:"pointer",textAlign:"left",marginBottom:10,boxShadow:"0 1px 3px rgba(11,42,45,.06)"}}>
-                    <div className="av" style={{background:isDemo?"#FEF3E2":"#E4F4F1",color:isDemo?"#92610A":"var(--teal)",border:isDemo?"1.5px solid #F5A623":"1.5px solid var(--mint)",width:44,height:44,flexShrink:0,borderRadius:"50%",display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700,fontSize:15}}>
+                    <div style={{background:isDemo?"#FEF3E2":"#E4F4F1",color:isDemo?"#92610A":"var(--teal)",border:isDemo?"1.5px solid #F5A623":"1.5px solid var(--mint)",width:44,height:44,flexShrink:0,borderRadius:"50%",display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700,fontSize:15}}>
                       {isDemo ? "⭐" : p.nombre.split(" ").map(w=>w[0]).join("").slice(0,2)}
                     </div>
                     <div style={{flex:1}}>
                       <div style={{fontWeight:700,fontSize:15,color:isDemo?"#92610A":"var(--ink)"}}>{p.nombre}</div>
                       <div className="muted" style={{fontSize:12,marginTop:2,display:"flex",alignItems:"center",gap:4}}>
                         <Store size={11}/>
-                        {sl ? sl.nombre.replace("Hiper Lider - ","").replace("Lider Express - ","") : isDemo ? "Sala de ejemplo" : "Sin jornada hoy"}
+                        {sl ? sl.nombre.replace("Hiper Lider - ","").replace("Lider Express - ","") : isDemo ? "Sala de ejemplo · Santiago" : "Sin jornada hoy"}
                       </div>
                     </div>
                     <ChevronRight size={18} color={isDemo?"#F5A623":"var(--muted)"}/>
