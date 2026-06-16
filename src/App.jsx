@@ -620,7 +620,9 @@ function Inicio({ rec, comm, steps, doneCount, pct, fecha, sala, setTab, setTurn
       )}
     </>
   );
-}({icon:Ic,label,val,accent}){
+}
+
+function MiniStat({icon:Ic,label,val,accent}){
   return(
     <div style={{flex:1}}>
       <div className="muted" style={{fontSize:10.5,display:"flex",alignItems:"center",gap:3}}><Ic size={11}/> {label}</div>
