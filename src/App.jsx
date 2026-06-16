@@ -552,8 +552,11 @@ function Inicio({ rec, comm, steps, doneCount, pct, fecha, sala, setTab, setTurn
   const fechaTxt = new Date(fecha+"T12:00").toLocaleDateString("es-CL",{weekday:"long",day:"numeric",month:"long"});
   const go = (k) => { setTurno(k); setTab("marcar"); };
   const stock = sala ? (STOCK_SALAS[sala.id] || {}) : {};
+  // Si todo el stock está en 0 (no actualizado), mostrar todos los productos
+  const stockVacio = Object.keys(stock).length === 0 || Object.values(stock).every(v => (typeof v==="number" ? v : 0) === 0);
   const prods = PRODUCTOS.filter(p => {
     if (sala?.productos && !sala.productos.includes(p.id)) return false;
+    if (stockVacio) return true;
     const s = stock[p.id];
     if (s === undefined || s === null) return true;
     return (typeof s === "number" ? s : 0) > 0;
@@ -910,8 +913,11 @@ function Marcar({ rec, updateRec, sala, cfg, turno, comm, pid }) {
   const tt = TURNOS[turno];
 
   const stock = sala ? (STOCK_SALAS[sala.id] || {}) : {};
+  // Si todo el stock está en 0 (no actualizado), mostrar todos los productos
+  const stockVacio = Object.keys(stock).length === 0 || Object.values(stock).every(v => (typeof v==="number" ? v : 0) === 0);
   const prods = PRODUCTOS.filter(p => {
     if (sala?.productos && !sala.productos.includes(p.id)) return false;
+    if (stockVacio) return true;
     const s = stock[p.id];
     if (s === undefined || s === null) return true;
     return (typeof s === "number" ? s : 0) > 0;
