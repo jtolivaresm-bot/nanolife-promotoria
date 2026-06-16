@@ -370,7 +370,11 @@ export default function App() {
   useEffect(()=>{ if(ready) saveDB(db); },[db,ready]);
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  const promotor = useMemo(()=>pid ? PROMOTORES.find(p=>p.id===pid)||null : null,[pid,configVersion]);
+  const promotor = useMemo(()=>{
+    if (!pid) return null;
+    if (pid==="udemo") return PROMOTOR_DEMO;
+    return PROMOTORES.find(p=>p.id===pid)||null;
+  },[pid,configVersion]);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const salaId = useMemo(()=>getSalaIdParaHoy(promotor),[promotor,configVersion]);
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -592,7 +596,7 @@ function Inicio({ rec, comm, steps, doneCount, pct, fecha, sala, setTab, setTurn
         </div>
       </div>
 
-      {/* COMISIÓN — al fondo */}
+      {/* COMISIÓN HOY */}
       <div className="card comm" style={{marginBottom:4}}>
         <div className="lbl">Comisión aproximada del día</div>
         <div className="amt">{fmtCLP(comm.total)}</div>
@@ -601,16 +605,18 @@ function Inicio({ rec, comm, steps, doneCount, pct, fecha, sala, setTab, setTurn
           <span>Venta {fmtCLP(comm.ventasTotal)}</span>
         </div>
         <div style={{marginTop:12,background:"rgba(255,255,255,.1)",borderRadius:10,padding:"9px 12px",fontSize:11.5,lineHeight:1.5,opacity:.9}}>
-          ⚠️ Las comisiones serán confirmadas según la venta reportada por sistema. Este es un cálculo preliminar.
+          ⚠️ Las comisiones serán confirmadas según la venta reportada por sistema B2B de Lider. Este es un cálculo preliminar.
         </div>
       </div>
 
       </>} {/* fin guard sala */}
 
-      {/* Capacitación siempre visible */}
+      {/* HISTORIAL — siempre visible */}
+      <ResumenCampana pid={pid} db={db}/>
+
+      {/* Capacitación siempre visible cuando no hay jornada */}
       {!sala && (
-        <div className="card" style={{marginTop:14,display:"flex",alignItems:"center",gap:12,cursor:"pointer",background:"#E4F4F1",border:"none"}}
-          onClick={()=>{}}>
+        <div className="card" style={{marginTop:14,display:"flex",alignItems:"center",gap:12,background:"#E4F4F1",border:"none"}}>
           <GraduationCap size={22} color="var(--teal)"/>
           <div>
             <div style={{fontWeight:600,fontSize:14,color:"var(--teal-d)"}}>Revisa el material de capacitación</div>
@@ -618,6 +624,103 @@ function Inicio({ rec, comm, steps, doneCount, pct, fecha, sala, setTab, setTurn
           </div>
         </div>
       )}
+    </>
+  );
+}
+
+/* ============================ RESUMEN CAMPAÑA ============================ */
+
+const PAGO_JORNADA = 22000; // CLP fijo por jornada activada (AM+PM ambos completos)
+
+function ResumenCampana({ pid, db }) {
+  const mesActual = todayISO().slice(0, 7); // "YYYY-MM"
+
+  const registros = Object.entries(db.records||{})
+    .filter(([k]) => k.startsWith(pid+"__") && k.split("__")[1]?.startsWith(mesActual))
+    .map(([k, r]) => {
+      const fecha = k.split("__")[1];
+      const rec = normalizeRec(r, pid, fecha);
+      const comm = calcDia(rec);
+      const amOk = !!rec.turnos.am.entrada && !!rec.turnos.am.salida;
+      const pmOk = !!rec.turnos.pm.entrada && !!rec.turnos.pm.salida;
+      const jornadaCompleta = amOk && pmOk;
+      const pagoJornada = jornadaCompleta ? PAGO_JORNADA : 0;
+      return { fecha, comm, amOk, pmOk, jornadaCompleta, pagoJornada };
+    })
+    .filter(r => r.amOk || r.pmOk || r.comm.unidades > 0)
+    .sort((a,b) => b.fecha.localeCompare(a.fecha));
+
+  if (!registros.length) return null;
+
+  const totalComision = registros.reduce((s,r)=>s+r.comm.total, 0);
+  const totalJornadas = registros.reduce((s,r)=>s+r.pagoJornada, 0);
+  const totalUnidades = registros.reduce((s,r)=>s+r.comm.unidades, 0);
+  const gran_total = totalComision + totalJornadas;
+  const jornadasCompletas = registros.filter(r=>r.jornadaCompleta).length;
+
+  const fmtFecha = f => {
+    const d = new Date(f+"T12:00");
+    return d.toLocaleDateString("es-CL",{weekday:"short",day:"numeric",month:"short"});
+  };
+
+  const mesNombre = new Date(mesActual+"-15").toLocaleDateString("es-CL",{month:"long",year:"numeric"});
+
+  return (
+    <>
+      <div className="sec-title" style={{marginTop:20}}>
+        Mi resumen · <span style={{textTransform:"capitalize"}}>{mesNombre}</span>
+      </div>
+
+      {/* Totales acumulados */}
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginTop:10}}>
+        <div style={{background:"var(--surface)",border:"1px solid var(--line)",borderRadius:16,padding:"14px 12px"}}>
+          <div className="eyebrow" style={{marginBottom:6}}>Jornadas</div>
+          <div className="amount" style={{fontSize:22,color:"var(--teal)"}}>{jornadasCompletas}</div>
+          <div className="muted" style={{fontSize:11.5,marginTop:2}}>{fmtCLP(totalJornadas)} acum.</div>
+        </div>
+        <div style={{background:"var(--surface)",border:"1px solid var(--line)",borderRadius:16,padding:"14px 12px"}}>
+          <div className="eyebrow" style={{marginBottom:6}}>Unidades</div>
+          <div className="amount" style={{fontSize:22,color:"var(--teal)"}}>{totalUnidades}</div>
+          <div className="muted" style={{fontSize:11.5,marginTop:2}}>{fmtCLP(totalComision)} acum.</div>
+        </div>
+      </div>
+
+      {/* Total acumulado */}
+      <div style={{background:"linear-gradient(135deg,var(--teal-d),#063b40)",borderRadius:16,padding:"16px",marginTop:10,color:"#fff"}}>
+        <div style={{fontSize:11,fontWeight:700,opacity:.8,letterSpacing:".08em",textTransform:"uppercase",marginBottom:4}}>Total estimado del mes</div>
+        <div style={{fontFamily:"'Segoe UI',system-ui",fontWeight:700,fontSize:30,letterSpacing:"-.02em"}}>{fmtCLP(gran_total)}</div>
+        <div style={{fontSize:11,marginTop:4,opacity:.75}}>Jornadas {fmtCLP(totalJornadas)} + Comisiones {fmtCLP(totalComision)}</div>
+        <div style={{marginTop:10,background:"rgba(255,255,255,.1)",borderRadius:8,padding:"8px 10px",fontSize:11,lineHeight:1.5,opacity:.9}}>
+          ⚠️ Montos aproximados. Las comisiones reales se confirman por el sistema B2B de Lider.
+        </div>
+      </div>
+
+      {/* Detalle por día */}
+      <div className="card" style={{padding:0,overflow:"hidden",marginTop:10}}>
+        <div style={{padding:"10px 14px",borderBottom:"1px solid var(--line)",display:"flex",justifyContent:"space-between"}}>
+          <span style={{fontSize:12,fontWeight:600,color:"var(--muted)"}}>Detalle por jornada</span>
+          <span style={{fontSize:11,color:"var(--muted)"}}>Jornada + Comisión</span>
+        </div>
+        {registros.map((r,i) => (
+          <div key={r.fecha} style={{display:"flex",alignItems:"center",padding:"11px 14px",borderBottom:i<registros.length-1?"1px solid var(--line)":undefined,gap:12}}>
+            <div style={{flex:1}}>
+              <div style={{fontWeight:600,fontSize:13.5,textTransform:"capitalize"}}>{fmtFecha(r.fecha)}</div>
+              <div style={{display:"flex",gap:6,marginTop:3}}>
+                <span className={`chip ${r.amOk?"chip-ok":"chip-off"}`} style={{fontSize:10,padding:"2px 7px"}}>AM {r.amOk?"✓":"—"}</span>
+                <span className={`chip ${r.pmOk?"chip-ok":"chip-off"}`} style={{fontSize:10,padding:"2px 7px"}}>PM {r.pmOk?"✓":"—"}</span>
+                {r.jornadaCompleta
+                  ? <span className="chip chip-ok" style={{fontSize:10,padding:"2px 7px"}}>Jornada ✓</span>
+                  : <span className="chip chip-warn" style={{fontSize:10,padding:"2px 7px"}}>Incompleta</span>
+                }
+              </div>
+            </div>
+            <div style={{textAlign:"right"}}>
+              <div className="amount" style={{fontSize:14,color:r.jornadaCompleta?"var(--teal)":"var(--muted)"}}>{fmtCLP(r.pagoJornada + r.comm.total)}</div>
+              <div className="muted" style={{fontSize:10.5,marginTop:1}}>{fmtCLP(r.pagoJornada)} + {fmtCLP(r.comm.total)}</div>
+            </div>
+          </div>
+        ))}
+      </div>
     </>
   );
 }
