@@ -295,18 +295,42 @@ function ShiftRing({ pct, size=86 }) {
   );
 }
 
+// Obtiene la salaId del promotor según la fecha actual
+// El sheet tiene columnas: salaId_19jun, salaId_20jun, salaId_26jun, salaId_27jun, salaId_03jul, salaId_04jul
+function getSalaIdParaHoy(promotor) {
+  if (!promotor) return null;
+  // Primero buscar columna específica para hoy
+  const d = new Date();
+  const dia = String(d.getDate()).padStart(2,"0");
+  const meses = ["jan","feb","mar","apr","may","jun","jul","aug","sep","oct","nov","dec"];
+  const mes = meses[d.getMonth()];
+  const key = `salaId_${dia}${mes}`;
+  if (promotor[key]) return promotor[key];
+  // Fallback: salaId genérico (compatibilidad con formato anterior)
+  if (promotor.salaId) return promotor.salaId;
+  return null;
+}
+
+// Normaliza RUT: quita puntos, guion, espacios y pone K en mayúscula
+function normRut(r) {
+  return r.replace(/[.\-\s]/g,"").toUpperCase();
+}
+
 export default function App() {
   const [ready, setReady] = useState(false);
   const [configVersion, setConfigVersion] = useState(0);
   const [db, setDb] = useState({ config:DEFAULT_CONFIG, records:{}, training:SEED_TRAINING });
-  const [pid, setPid] = useState("u1");
+  const [pid, setPid] = useState(null); // null = no ha hecho login
   const [tab, setTab] = useState("inicio");
   const [turno, setTurno] = useState(turnoActual());
-  const [profileOpen, setProfileOpen] = useState(false);
   const [coordOpen, setCoordOpen] = useState(false);
   const fecha = todayISO();
 
   useEffect(()=>{
+    // Restore session
+    const savedPid = localStorage.getItem("nanolife_pid");
+    if(savedPid) setPid(savedPid);
+
     // Load local data immediately so the app is usable offline
     const d=loadDB();
     if(d) setDb({config:{...DEFAULT_CONFIG,...d.config},records:d.records||{},training:d.training||SEED_TRAINING});
@@ -334,9 +358,11 @@ export default function App() {
   useEffect(()=>{ if(ready) saveDB(db); },[db,ready]);
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  const promotor = useMemo(()=>PROMOTORES.find(p=>p.id===pid)||PROMOTORES[0]||{id:pid,nombre:"Promotor",salaId:""},[pid,configVersion]);
+  const promotor = useMemo(()=>pid ? PROMOTORES.find(p=>p.id===pid)||null : null,[pid,configVersion]);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  const sala = useMemo(()=>SALAS.find(s=>s.id===promotor?.salaId)||null,[promotor,configVersion]);
+  const salaId = useMemo(()=>getSalaIdParaHoy(promotor),[promotor,configVersion]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const sala = useMemo(()=>salaId ? SALAS.find(s=>s.id===salaId)||null : null,[salaId,configVersion]);
   const rid = `${pid}__${fecha}`;
   const rec = useMemo(()=>normalizeRec(db.records[rid],pid,fecha),[db.records,rid,pid,fecha]);
 
@@ -362,13 +388,26 @@ export default function App() {
     </div>
   );
 
+  // LOGIN: no ha ingresado todavía
+  if(!pid) return (
+    <div className="nl-root"><style>{CSS}</style>
+      <div className="nl-phone">
+        <LoginScreen promotores={PROMOTORES} salas={SALAS} onLogin={id=>{setPid(id); localStorage.setItem("nanolife_pid",id);}} configVersion={configVersion}/>
+      </div>
+    </div>
+  );
+
   const TABS = [
     {k:"inicio",   ic:Home,        lbl:"Inicio"},
     {k:"marcar",   ic:MapPin,      lbl:"Marcar"},
     {k:"capacita", ic:GraduationCap, lbl:"Capacitación"},
   ];
 
-  const salaNombre=sala?.nombre.replace("Hiper Lider - ","").replace("Lider Express - ","")||"Sin sala asignada";
+  const salaNombre = sala
+    ? sala.nombre.replace("Hiper Lider - ","").replace("Lider Express - ","")
+    : "Sin jornada hoy";
+
+  const handleLogout = () => { localStorage.removeItem("nanolife_pid"); setPid(null); };
 
   return (
     <div className="nl-root">
@@ -383,13 +422,13 @@ export default function App() {
             </div>
             <button className="iconbtn" onClick={()=>setCoordOpen(true)}><ShieldCheck size={18}/></button>
           </div>
-          <button className="who" onClick={()=>setProfileOpen(true)}>
-            <div className="av">{promotor.nombre.split(" ").map(w=>w[0]).join("").slice(0,2)}</div>
+          <button className="who" onClick={handleLogout} title="Toca para cerrar sesión">
+            <div className="av">{promotor?.nombre.split(" ").map(w=>w[0]).join("").slice(0,2)||"?"}</div>
             <div style={{flex:1}}>
-              <div className="nm">{promotor.nombre}</div>
+              <div className="nm">{promotor?.nombre||"—"}</div>
               <div className="lc"><Store size={11}/> {salaNombre}</div>
             </div>
-            <ChevronRight size={17} opacity={.7}/>
+            <LogOut size={15} opacity={.7}/>
           </button>
           {tab==="marcar" && (
             <div className="seg">
@@ -418,7 +457,6 @@ export default function App() {
           );})}
         </div>
 
-        {profileOpen && <ProfileSheet pid={pid} setPid={id=>{setPid(id);setProfileOpen(false);}} close={()=>setProfileOpen(false)} promotores={PROMOTORES} salas={SALAS}/>}
         {coordOpen && <CoordinadorSheet db={db} setDb={setDb} fecha={fecha} close={()=>setCoordOpen(false)}/>}
       </div>
     </div>
@@ -526,7 +564,7 @@ function Inicio({ rec, comm, steps, doneCount, pct, fecha, sala, setTab, setTurn
 
       {/* COMISIÓN — al fondo */}
       <div className="card comm" style={{marginBottom:4}}>
-        <div className="lbl">Comisión del día</div>
+        <div className="lbl">Comisión aproximada del día</div>
         <div className="amt">{fmtCLP(comm.total)}</div>
         <div style={{display:"flex",gap:20,fontSize:12,marginTop:10,opacity:.88}}>
           <span>{comm.unidades} unidades</span>
@@ -1077,31 +1115,110 @@ function Capacitacion({ training }) {
   );
 }
 
-function ProfileSheet({ pid, setPid, close, promotores, salas }) {
+/* ============================ LOGIN SCREEN ============================ */
+
+function LoginScreen({ promotores, salas, onLogin, configVersion }) {
+  const [step, setStep] = useState("nombre"); // "nombre" | "rut"
+  const [selId, setSelId] = useState(null);
+  const [rut, setRut] = useState("");
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  const selProm = promotores.find(p=>p.id===selId);
+
+  function handleSelectNombre(id) {
+    setSelId(id); setRut(""); setError(""); setStep("rut");
+  }
+
+  function handleLogin() {
+    const rutInput = normRut(rut);
+    const rutGuardado = normRut(selProm?.rut||"");
+    if (!rutInput) { setError("Ingresa tu RUT"); return; }
+    if (rutInput !== rutGuardado) { setError("RUT incorrecto. Intenta de nuevo."); return; }
+    setLoading(true);
+    setTimeout(()=>{ onLogin(selId); setLoading(false); }, 400);
+  }
+
   return (
-    <div className="scrim" onClick={close}>
-      <div className="sheet" onClick={e=>e.stopPropagation()}>
-        <div className="grab"/>
-        <div className="sec-title" style={{marginTop:8}}>¿Quién eres?</div>
-        <p className="muted" style={{fontSize:13,marginBottom:8}}>Selecciona tu nombre. Tu sala se asignará automáticamente.</p>
-        {promotores.map(p=>{
-          const sl = salas.find(s=>s.id===p.salaId);
-          return (
-            <button key={p.id} className="card tight" onClick={()=>setPid(p.id)}
-              style={{width:"100%",display:"flex",alignItems:"center",gap:12,cursor:"pointer",textAlign:"left",border:p.id===pid?"2px solid var(--mint-d)":"1px solid var(--line)"}}>
-              <div className="av" style={{background:"#E4F4F1",color:"var(--teal)",border:"1.5px solid var(--mint)",width:42,height:42,flexShrink:0}}>
-                {p.nombre.split(" ").map(w=>w[0]).join("").slice(0,2)}
-              </div>
-              <div style={{flex:1}}>
-                <div style={{fontWeight:700,fontSize:14}}>{p.nombre}</div>
-                <div className="muted" style={{fontSize:12,display:"flex",alignItems:"center",gap:4,marginTop:2}}>
-                  <Store size={11}/> {sl?.nombre.replace("Hiper Lider - ","").replace("Lider Express - ","") || "—"} · {sl?.ciudad || ""}
-                </div>
-              </div>
-              {p.id===pid && <CheckCircle2 size={20} color="var(--mint-d)"/>}
+    <div style={{height:"100%",display:"flex",flexDirection:"column",background:"linear-gradient(160deg,#0A4C52,#0E6F76)"}}>
+      {/* Header */}
+      <div style={{padding:"48px 28px 28px",textAlign:"center"}}>
+        <NanoLogo height={48}/>
+        <div style={{color:"rgba(255,255,255,.9)",fontSize:15,fontWeight:600,marginTop:16}}>Plataforma de Promotoría</div>
+        <div style={{color:"rgba(255,255,255,.65)",fontSize:13,marginTop:4}}>Campaña Lider 2026</div>
+      </div>
+
+      {/* Card */}
+      <div style={{flex:1,background:"var(--bg)",borderRadius:"28px 28px 0 0",padding:"28px 20px",overflowY:"auto"}}>
+
+        {step==="nombre" && (
+          <>
+            <div style={{fontFamily:"'Segoe UI',system-ui",fontWeight:700,fontSize:22,color:"var(--ink)",marginBottom:6}}>¡Hola! 👋</div>
+            <div className="muted" style={{fontSize:14,marginBottom:20}}>Selecciona tu nombre para continuar.</div>
+            {promotores.length === 0 && (
+              <div className="empty">Cargando promotores… <br/><span style={{fontSize:12}}>Si esto demora, verifica la conexión.</span></div>
+            )}
+            {promotores.map(p=>{
+              const sl = salas.find(s=>s.id===getSalaIdParaHoy(p));
+              return (
+                <button key={p.id} onClick={()=>handleSelectNombre(p.id)}
+                  style={{width:"100%",background:"var(--surface)",border:"1px solid var(--line)",borderRadius:16,padding:"14px 16px",display:"flex",alignItems:"center",gap:12,cursor:"pointer",textAlign:"left",marginBottom:10,boxShadow:"0 1px 3px rgba(11,42,45,.06)"}}>
+                  <div className="av" style={{background:"#E4F4F1",color:"var(--teal)",border:"1.5px solid var(--mint)",width:44,height:44,flexShrink:0,borderRadius:"50%",display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700,fontSize:15}}>
+                    {p.nombre.split(" ").map(w=>w[0]).join("").slice(0,2)}
+                  </div>
+                  <div style={{flex:1}}>
+                    <div style={{fontWeight:700,fontSize:15,color:"var(--ink)"}}>{p.nombre}</div>
+                    <div className="muted" style={{fontSize:12,marginTop:2,display:"flex",alignItems:"center",gap:4}}>
+                      <Store size={11}/>
+                      {sl ? sl.nombre.replace("Hiper Lider - ","").replace("Lider Express - ","") : "Sin jornada hoy"}
+                    </div>
+                  </div>
+                  <ChevronRight size={18} color="var(--muted)"/>
+                </button>
+              );
+            })}
+          </>
+        )}
+
+        {step==="rut" && selProm && (
+          <>
+            <button onClick={()=>{setStep("nombre");setError("");}}
+              style={{display:"flex",alignItems:"center",gap:6,background:"none",border:"none",color:"var(--teal)",cursor:"pointer",fontWeight:600,fontSize:14,marginBottom:20,padding:0}}>
+              <ChevronRight size={16} style={{transform:"rotate(180deg)"}}/> Volver
             </button>
-          );
-        })}
+
+            <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:24}}>
+              <div className="av" style={{background:"#E4F4F1",color:"var(--teal)",border:"2px solid var(--mint)",width:52,height:52,flexShrink:0,borderRadius:"50%",display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700,fontSize:18}}>
+                {selProm.nombre.split(" ").map(w=>w[0]).join("").slice(0,2)}
+              </div>
+              <div>
+                <div style={{fontWeight:700,fontSize:17,color:"var(--ink)"}}>{selProm.nombre}</div>
+                <div className="muted" style={{fontSize:12}}>Ingresa tu RUT para confirmar</div>
+              </div>
+            </div>
+
+            <label className="field-lbl">RUT (sin puntos ni guión)</label>
+            <input className="inp" type="text" inputMode="numeric"
+              placeholder="Ej: 208583662"
+              value={rut}
+              onChange={e=>{setRut(e.target.value);setError("");}}
+              onKeyDown={e=>e.key==="Enter"&&handleLogin()}
+              style={{fontSize:18,letterSpacing:2,textAlign:"center"}}
+              autoFocus
+            />
+            {error && (
+              <div style={{display:"flex",alignItems:"center",gap:8,padding:"10px",background:"#FEE2E2",borderRadius:10,marginTop:10}}>
+                <AlertCircle size={15} color="#DC2626"/>
+                <span style={{fontSize:13,color:"#DC2626",fontWeight:500}}>{error}</span>
+              </div>
+            )}
+            <button className="btn btn-primary btn-block" style={{marginTop:16,padding:"15px"}}
+              disabled={loading||!rut} onClick={handleLogin}>
+              {loading ? <RefreshCw size={18} className="spin"/> : <CheckCircle2 size={18}/>}
+              {loading ? "Verificando…" : "Ingresar"}
+            </button>
+          </>
+        )}
       </div>
     </div>
   );
