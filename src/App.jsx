@@ -8,21 +8,20 @@ import {
 
 const STORAGE_KEY = "nanolife_v5";
 
-// Stock actualizado al último viernes (unidades por producto por sala)
-// { pid: { gondola: N, bodega: N } }
+// Stock por sala — número plano de unidades totales disponibles
+// Se sobreescribe desde Google Sheets al cargar
 let STOCK_SALAS = {
-  s01: { p1:{gondola:12,bodega:0},  p2:{gondola:8,bodega:0},  p3:{gondola:10,bodega:5},  p4:{gondola:6,bodega:0},  p5:{gondola:4,bodega:0}  },
-  s02: { p1:{gondola:10,bodega:12}, p2:{gondola:10,bodega:8}, p3:{gondola:8,bodega:0},   p4:{gondola:8,bodega:4},  p5:{gondola:6,bodega:0}  },
-  s03: { p1:{gondola:14,bodega:6},  p2:{gondola:12,bodega:0}, p3:{gondola:10,bodega:10}, p4:{gondola:8,bodega:0},  p5:{gondola:4,bodega:2}  },
-  s04: { p1:{gondola:6,bodega:0},   p2:{gondola:6,bodega:0},  p3:{gondola:4,bodega:0},   p4:{gondola:4,bodega:0},  p5:{gondola:2,bodega:0}  },
-  s05: { p1:{gondola:16,bodega:8},  p2:{gondola:14,bodega:6}, p3:{gondola:12,bodega:0},  p4:{gondola:10,bodega:4}, p5:{gondola:8,bodega:0}  },
-  s06: { p1:{gondola:10,bodega:4},  p2:{gondola:8,bodega:0},  p3:{gondola:12,bodega:8},  p4:{gondola:6,bodega:0},  p5:{gondola:4,bodega:4}  },
-  s07: { p1:{gondola:18,bodega:10}, p2:{gondola:16,bodega:8}, p3:{gondola:14,bodega:6},  p4:{gondola:12,bodega:0}, p5:{gondola:6,bodega:2}  },
-  s08: { p1:{gondola:12,bodega:6},  p2:{gondola:10,bodega:4}, p3:{gondola:10,bodega:0},  p4:{gondola:8,bodega:4},  p5:{gondola:4,bodega:0}  },
-  s09: { p1:{gondola:14,bodega:8},  p2:{gondola:12,bodega:6}, p3:{gondola:8,bodega:4},   p4:{gondola:10,bodega:0}, p5:{gondola:6,bodega:2}  },
-  s10: { p1:{gondola:10,bodega:0},  p2:{gondola:8,bodega:4},  p3:{gondola:12,bodega:0},  p4:{gondola:6,bodega:0},  p5:{gondola:4,bodega:0}  },
-  // Sala DEMO — siempre disponible para capacitación
-  sdemo: { p1:{gondola:24,bodega:12}, p2:{gondola:18,bodega:6}, p3:{gondola:20,bodega:8}, p4:{gondola:15,bodega:5}, p5:{gondola:10,bodega:4} },
+  s01: { p1:12, p2:8,  p3:15, p4:6,  p5:4  },
+  s02: { p1:22, p2:18, p3:8,  p4:12, p5:6  },
+  s03: { p1:20, p2:12, p3:20, p4:8,  p5:6  },
+  s04: { p1:6,  p2:6,  p3:4,  p4:4,  p5:2  },
+  s05: { p1:24, p2:20, p3:12, p4:14, p5:8  },
+  s06: { p1:14, p2:8,  p3:20, p4:6,  p5:8  },
+  s07: { p1:28, p2:24, p3:20, p4:12, p5:8  },
+  s08: { p1:18, p2:14, p3:10, p4:12, p5:4  },
+  s09: { p1:22, p2:18, p3:12, p4:10, p5:8  },
+  s10: { p1:10, p2:12, p3:12, p4:6,  p5:4  },
+  sdemo: { p1:36, p2:24, p3:28, p4:20, p5:14 },
 };
 
 const PRODUCTOS = [
@@ -490,7 +489,12 @@ function Inicio({ rec, comm, steps, doneCount, pct, fecha, sala, setTab, setTurn
   const fechaTxt = new Date(fecha+"T12:00").toLocaleDateString("es-CL",{weekday:"long",day:"numeric",month:"long"});
   const go = (k) => { setTurno(k); setTab("marcar"); };
   const stock = sala ? (STOCK_SALAS[sala.id] || {}) : {};
-  const prods = sala?.productos ? PRODUCTOS.filter(p=>sala.productos.includes(p.id)) : PRODUCTOS;
+  const prods = PRODUCTOS.filter(p => {
+    if (sala?.productos && !sala.productos.includes(p.id)) return false;
+    const s = stock[p.id];
+    if (s === undefined || s === null) return true;
+    return (typeof s === "number" ? s : 0) > 0;
+  });
   const lf=(()=>{const d=new Date(),day=d.getDay();d.setDate(d.getDate()-((day===0?2:day===6?1:day-5+7)%7||7));return d.toLocaleDateString("es-CL",{day:"numeric",month:"long"});})();
 
   // Calcular jornadas comprometidas del mes actual
@@ -682,9 +686,7 @@ function Inicio({ rec, comm, steps, doneCount, pct, fecha, sala, setTab, setTurn
         </div>
         {prods.map((p,i)=>{
           const s = stock[p.id];
-          const total = s === undefined ? null
-            : typeof s === "number" ? s
-            : (s.gondola||0) + (s.bodega||0);
+          const total = typeof s === "number" ? s : null;
           const cero = total === 0;
           return (
             <div key={p.id} className="stk-row" style={{borderBottom:i<prods.length-1?"1px solid var(--line)":undefined}}>
@@ -845,26 +847,36 @@ function Marcar({ rec, updateRec, sala, cfg, turno, comm }) {
   const tt = TURNOS[turno];
 
   const stock = sala ? (STOCK_SALAS[sala.id] || {}) : {};
-  const getStockTotal = (s) => {
-    if (!s && s !== 0) return null;
-    if (typeof s === "number") return s;
-    return (s.gondola||0) + (s.bodega||0);
-  };
   const prods = PRODUCTOS.filter(p => {
     if (sala?.productos && !sala.productos.includes(p.id)) return false;
     const s = stock[p.id];
-    if (s === undefined || s === null) return true; // sin datos = mostrar
-    const total = getStockTotal(s);
-    return total === null || total > 0;
+    if (s === undefined || s === null) return true;
+    return (typeof s === "number" ? s : 0) > 0;
   });
 
-  async function marcar(tipo) {
+  const [gpsPreview, setGpsPreview] = useState(null); // {lat,lng,acc,tipo} — pantalla de confirmación
+
+  async function iniciarMarcacion(tipo) {
     setLoading(true);
     const gps = await getGPS();
-    const stamp = { ts:Date.now(), ...(gps||{}) };
-    if(gps) stamp.dist = haversine(gps.lat,gps.lng,sala.lat,sala.lng);
+    setLoading(false);
+    if (gps) {
+      setGpsPreview({ ...gps, tipo });
+    } else {
+      // Sin GPS — confirmar igual sin coordenadas
+      setGpsPreview({ lat:null, lng:null, acc:null, tipo });
+    }
+  }
 
-    // Capturar fotos ANTES de updateRec (rec es el estado actual, tiene las fotos)
+  async function confirmarMarcacion() {
+    const { lat, lng, acc, tipo } = gpsPreview;
+    setGpsPreview(null);
+    setLoading(true);
+
+    const stamp = { ts:Date.now() };
+    if (lat) { stamp.lat=lat; stamp.lng=lng; stamp.acc=acc; }
+
+    // Capturar fotos y cantidades ANTES de updateRec
     const fotosActuales = tipo==="salida" && turno==="am"
       ? { ...rec.turnos.am.fotosProducto }
       : {};
@@ -872,10 +884,9 @@ function Marcar({ rec, updateRec, sala, cfg, turno, comm }) {
       ? { ...rec.turnos[turno].cantidades }
       : {};
 
-    // Guardar marcación localmente
+    // Guardar localmente
     updateRec(r=>({...r, turnos:{...r.turnos,[turno]:{...r.turnos[turno],[tipo]:stamp}}}));
 
-    // Promotor info
     const promotorObj = pid==="udemo" ? PROMOTOR_DEMO : PROMOTORES.find(p=>p.id===pid)||{nombre:"Promotor"};
 
     try {
@@ -893,8 +904,8 @@ function Marcar({ rec, updateRec, sala, cfg, turno, comm }) {
           lat: stamp.lat??"",
           lng: stamp.lng??"",
           acc: stamp.acc??"",
-          dist: stamp.dist??"",
-          enLocal: stamp.dist!=null && stamp.dist<=200 ? "Sí":"No",
+          dist: "",
+          enLocal: "",
         }})
       });
       if(!marcRes.ok) console.error("Sheets marcacion error:", await marcRes.text());
@@ -921,10 +932,9 @@ function Marcar({ rec, updateRec, sala, cfg, turno, comm }) {
           if(!ventasRes.ok) console.error("Sheets ventas error:", await ventasRes.text());
         }
 
-        // 3. Fotos → Drive (solo salida AM, usando fotos capturadas antes del updateRec)
+        // 3. Fotos → Drive (solo salida AM)
         if (turno==="am") {
           const fotoEntries = Object.entries(fotosActuales).filter(([,v])=>v);
-          console.log(`Subiendo ${fotoEntries.length} fotos a Drive...`);
           for (const [prodId, dataUrl] of fotoEntries) {
             const prod = PRODUCTOS.find(p=>p.id===prodId);
             const fileName = `${todayISO()}_${promotorObj.nombre.replace(/ /g,"_")}_${sala.codigo||sala.id}_${(prod?.nombre||prodId).replace(/ /g,"_")}.jpg`;
@@ -933,44 +943,47 @@ function Marcar({ rec, updateRec, sala, cfg, turno, comm }) {
                 method:"POST", headers:{"Content-Type":"application/json"},
                 body: JSON.stringify({ dataUrl, fileName, folderId:"1SSaJ_YJIhiVouHUzxfU1n273tK_aR7D7" })
               });
-              if(fotoRes.ok) {
-                const {fileId} = await fotoRes.json();
-                console.log(`✓ Foto subida: ${fileName} (${fileId})`);
-              } else {
-                console.error(`✗ Error foto ${fileName}:`, await fotoRes.text());
-              }
-            } catch(e) {
-              console.error(`✗ Error foto ${fileName}:`, e.message);
-            }
+              if(fotoRes.ok) { const {fileId}=await fotoRes.json(); console.log(`✓ Foto: ${fileName} (${fileId})`); }
+              else console.error(`✗ Foto ${fileName}:`, await fotoRes.text());
+            } catch(e) { console.error(`✗ Foto ${fileName}:`, e.message); }
           }
         }
       }
-    } catch(e) {
-      console.error("Sync error:", e);
-    }
+    } catch(e) { console.error("Sync error:", e); }
 
     setLoading(false);
   }
+
+  // Pantalla de confirmación con mapa
+  if (gpsPreview) return (
+    <GpsConfirm
+      gps={gpsPreview}
+      sala={sala}
+      turno={turno}
+      onConfirmar={confirmarMarcacion}
+      onCancelar={()=>setGpsPreview(null)}
+    />
+  );
 
   const fotosOk = prods.every(p=>tr.fotosProducto?.[p.id]);
 
   // ENTRADA AM: primero fotos, luego marcar entrada
   if (turno==="am" && !tr.entrada) return (
-    <EntradaAM loading={loading} onMarcar={()=>marcar("entrada")}
+    <EntradaAM loading={loading} onMarcar={()=>iniciarMarcacion("entrada")}
       sala={sala} tr={tr} prods={prods} updateRec={updateRec}/>
   );
   // SALIDA AM: ventas + marcar salida
   if (turno==="am" && tr.entrada && !tr.salida) return (
-    <SalidaConVentas tr={tr} tt={tt} loading={loading} onMarcar={()=>marcar("salida")}
+    <SalidaConVentas tr={tr} tt={tt} loading={loading} onMarcar={()=>iniciarMarcacion("salida")}
       prods={prods} updateRec={updateRec} turno="am" rec={rec} sala={sala} comm={comm} tipo="AM"/>
   );
   // ENTRADA PM: solo botón
   if (turno==="pm" && !tr.entrada) return (
-    <MarcarEntrada loading={loading} onMarcar={()=>marcar("entrada")} sala={sala} tipo="PM"/>
+    <MarcarEntrada loading={loading} onMarcar={()=>iniciarMarcacion("entrada")} sala={sala} tipo="PM"/>
   );
   // SALIDA PM: ventas + audio + marcar salida
   if (turno==="pm" && tr.entrada && !tr.salida) return (
-    <SalidaConVentas tr={tr} tt={tt} loading={loading} onMarcar={()=>marcar("salida")}
+    <SalidaConVentas tr={tr} tt={tt} loading={loading} onMarcar={()=>iniciarMarcacion("salida")}
       prods={prods} updateRec={updateRec} turno="pm" rec={rec} sala={sala} comm={comm} tipo="PM"/>
   );
   return <TurnoCerrado tr={tr} tt={tt} comm={comm} turno={turno} sala={sala} prods={prods}/>;
@@ -1149,6 +1162,70 @@ function TurnoCerrado({ tr, tt, comm, turno, sala, prods }) {
 }
 
 /* ---- sub-componentes compartidos ---- */
+
+/* ============================ GPS CONFIRM ============================ */
+
+function GpsConfirm({ gps, sala, turno, onConfirmar, onCancelar }) {
+  const tt = TURNOS[turno];
+  const tipo = gps.tipo;
+  const tipoLabel = tipo === "entrada" ? "Entrada" : "Salida";
+  const hora = new Date().toLocaleTimeString("es-CL", {hour:"2-digit", minute:"2-digit"});
+
+  const mapUrl = gps.lat
+    ? `https://staticmap.openstreetmap.de/staticmap.php?center=${gps.lat},${gps.lng}&zoom=16&size=400x220&markers=${gps.lat},${gps.lng},red`
+    : null;
+
+  return (
+    <div style={{marginTop:16}}>
+      <div className="sec-title">Confirmar {tipoLabel} {tt.label}</div>
+
+      {/* Mapa */}
+      <div style={{borderRadius:16,overflow:"hidden",marginTop:10,background:"#E8ECEF",position:"relative",height:220}}>
+        {mapUrl ? (
+          <img src={mapUrl} alt="Tu ubicación" style={{width:"100%",height:"100%",objectFit:"cover",display:"block"}}
+            onError={e=>{e.target.style.display="none";}}/>
+        ) : (
+          <div style={{height:"100%",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:8,color:"var(--muted)"}}>
+            <AlertCircle size={28}/><span style={{fontSize:13}}>GPS no disponible</span>
+          </div>
+        )}
+        <div style={{position:"absolute",top:10,right:10,background:"rgba(0,0,0,.65)",borderRadius:8,padding:"4px 10px",color:"#fff",fontSize:13,fontWeight:700}}>
+          {hora} hrs
+        </div>
+      </div>
+
+      {/* Coordenadas */}
+      <div className="card tight" style={{marginTop:10}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+          <span style={{fontWeight:600,fontSize:14}}>Tu ubicación registrada</span>
+          {gps.lat
+            ? <span className="chip chip-ok" style={{fontSize:11}}><CheckCircle2 size={12}/> GPS activo</span>
+            : <span className="chip chip-warn" style={{fontSize:11}}><AlertCircle size={12}/> Sin GPS</span>}
+        </div>
+        {gps.lat ? (
+          <div style={{fontFamily:"monospace",fontSize:12,color:"var(--muted)",lineHeight:1.8,background:"var(--bg)",borderRadius:8,padding:"8px 12px"}}>
+            <div>Latitud:   <b style={{color:"var(--ink)"}}>{gps.lat.toFixed(6)}</b></div>
+            <div>Longitud:  <b style={{color:"var(--ink)"}}>{gps.lng.toFixed(6)}</b></div>
+            <div>Precisión: <b style={{color:"var(--ink)"}}>±{gps.acc} m</b></div>
+          </div>
+        ) : (
+          <p className="muted" style={{fontSize:12}}>No se pudo obtener tu ubicación. La marcación se registrará sin coordenadas.</p>
+        )}
+        <div style={{fontSize:11,color:"var(--muted)",marginTop:8,lineHeight:1.5}}>
+          📍 Esta ubicación y hora quedarán registradas en tu marcación de {tipoLabel.toLowerCase()} del {tt.label}.
+        </div>
+      </div>
+
+      <div style={{display:"flex",gap:10,marginTop:14}}>
+        <button className="btn btn-out" style={{flex:1}} onClick={onCancelar}>Cancelar</button>
+        <button className={`btn ${tipo==="entrada"?"btn-primary":"btn-coral"}`} style={{flex:2}} onClick={onConfirmar}>
+          {tipo==="entrada" ? <LogIn size={18}/> : <LogOut size={18}/>}
+          Confirmar {tipoLabel}
+        </button>
+      </div>
+    </div>
+  );
+}
 
 function GPSChip({ data, sala }) {
   if(!data?.lat) return <span className="muted" style={{fontSize:11.5,display:"flex",alignItems:"center",gap:4}}><AlertCircle size={11}/> Sin GPS</span>;
