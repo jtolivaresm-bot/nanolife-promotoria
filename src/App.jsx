@@ -1010,7 +1010,7 @@ function Marcar({ rec, updateRec, sala, cfg, turno, comm, pid }) {
   // SALIDA AM: ventas + marcar salida
   if (turno==="am" && tr.entrada && !tr.salida) return (
     <SalidaConVentas tr={tr} tt={tt} loading={loading} onMarcar={()=>iniciarMarcacion("salida")}
-      prods={prods} updateRec={updateRec} turno="am" rec={rec} sala={sala} comm={comm} tipo="AM"/>
+      prods={prods} updateRec={updateRec} turno="am" rec={rec} sala={sala} comm={comm} tipo="AM" pid={pid}/>
   );
   // ENTRADA PM: solo botón
   if (turno==="pm" && !tr.entrada) return (
@@ -1019,7 +1019,7 @@ function Marcar({ rec, updateRec, sala, cfg, turno, comm, pid }) {
   // SALIDA PM: ventas + audio + marcar salida
   if (turno==="pm" && tr.entrada && !tr.salida) return (
     <SalidaConVentas tr={tr} tt={tt} loading={loading} onMarcar={()=>iniciarMarcacion("salida")}
-      prods={prods} updateRec={updateRec} turno="pm" rec={rec} sala={sala} comm={comm} tipo="PM"/>
+      prods={prods} updateRec={updateRec} turno="pm" rec={rec} sala={sala} comm={comm} tipo="PM" pid={pid}/>
   );
   return <TurnoCerrado tr={tr} tt={tt} comm={comm} turno={turno} sala={sala} prods={prods}/>;
 }
@@ -1106,7 +1106,7 @@ function MarcarEntrada({ loading, onMarcar, sala, tipo = "AM" }) {
 }
 
 /* SALIDA AM y PM: ventas + (audio si PM) + marcar salida */
-function SalidaConVentas({ tr, tt, loading, onMarcar, prods, updateRec, turno, rec, sala, comm, tipo }) {
+function SalidaConVentas({ tr, tt, loading, onMarcar, prods, updateRec, turno, rec, sala, comm, tipo, pid }) {
   const sub = calcTurno(tr);
   return (
     <>
@@ -1145,7 +1145,7 @@ function SalidaConVentas({ tr, tt, loading, onMarcar, prods, updateRec, turno, r
       {tipo === "PM" && (
         <>
           <div className="sec-title">Audio de cierre</div>
-          <AudioCierre rec={rec} updateRec={updateRec} />
+          <AudioCierre rec={rec} updateRec={updateRec} pid={pid} />
         </>
       )}
 
@@ -1341,7 +1341,7 @@ function LineaR({ l, v }) {
   );
 }
 
-function AudioCierre({ rec, updateRec }) {
+function AudioCierre({ rec, updateRec, pid }) {
   const [recording, setRecording] = useState(false);
   const [secs, setSecs] = useState(0);
   const [audioURL, setAudioURL] = useState(null);
