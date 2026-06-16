@@ -529,7 +529,7 @@ export default function App() {
         {/* SCREENS */}
         <div className="nl-screen">
           {tab==="inicio"   && <Inicio   rec={rec} comm={comm} steps={steps} doneCount={doneCount} pct={pct} fecha={fecha} sala={sala} setTab={setTab} setTurno={setTurno} pid={pid} db={db}/>}
-          {tab==="marcar"   && <Marcar   rec={rec} updateRec={updateRec} sala={sala} cfg={db.config} turno={turno} comm={comm}/>}
+          {tab==="marcar"   && <Marcar   rec={rec} updateRec={updateRec} sala={sala} cfg={db.config} turno={turno} comm={comm} pid={pid}/>}
           {tab==="capacita" && <Capacitacion training={db.training}/>}
         </div>
 
@@ -904,7 +904,7 @@ function MiniStat({icon:Ic,label,val,accent}){
 
 // El flujo de marcación integra fotos (entrada AM) y ventas (salida AM y PM)
 
-function Marcar({ rec, updateRec, sala, cfg, turno, comm }) {
+function Marcar({ rec, updateRec, sala, cfg, turno, comm, pid }) {
   const [loading, setLoading] = useState(false);
   const tr = rec.turnos[turno];
   const tt = TURNOS[turno];
@@ -1241,25 +1241,32 @@ function GpsConfirm({ gps, sala, turno, onConfirmar, onCancelar }) {
   const tipoLabel = tipo === "entrada" ? "Entrada" : "Salida";
   const hora = new Date().toLocaleTimeString("es-CL", {hour:"2-digit", minute:"2-digit"});
 
-  const mapUrl = gps.lat
-    ? `https://staticmap.openstreetmap.de/staticmap.php?center=${gps.lat},${gps.lng}&zoom=16&size=400x220&markers=${gps.lat},${gps.lng},red`
-    : null;
+  const mapUrl = null; // no external map needed
+  const [mapError, setMapError] = useState(false);
 
   return (
     <div style={{marginTop:16}}>
       <div className="sec-title">Confirmar {tipoLabel} {tt.label}</div>
 
-      {/* Mapa */}
-      <div style={{borderRadius:16,overflow:"hidden",marginTop:10,background:"#E8ECEF",position:"relative",height:220}}>
-        {mapUrl ? (
-          <img src={mapUrl} alt="Tu ubicación" style={{width:"100%",height:"100%",objectFit:"cover",display:"block"}}
-            onError={e=>{e.target.style.display="none";}}/>
+      {/* Ubicación */}
+      <div style={{borderRadius:16,overflow:"hidden",marginTop:10,background:"linear-gradient(135deg,#0A4C52,#0E6F76)",position:"relative",padding:"20px 16px",minHeight:160,display:"flex",flexDirection:"column",justifyContent:"space-between"}}>
+        <div style={{display:"flex",alignItems:"center",gap:8}}>
+          <MapPin size={18} color="rgba(255,255,255,.9)"/>
+          <span style={{color:"rgba(255,255,255,.9)",fontSize:13,fontWeight:600}}>Tu ubicación en este momento</span>
+        </div>
+        {gps.lat ? (
+          <div style={{marginTop:16}}>
+            <div style={{fontFamily:"monospace",fontSize:13,color:"rgba(255,255,255,.85)",lineHeight:2}}>
+              <div>📍 {gps.lat.toFixed(5)}, {gps.lng.toFixed(5)}</div>
+              <div style={{fontSize:11,opacity:.7}}>Precisión: ±{gps.acc} metros</div>
+            </div>
+          </div>
         ) : (
-          <div style={{height:"100%",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:8,color:"var(--muted)"}}>
-            <AlertCircle size={28}/><span style={{fontSize:13}}>GPS no disponible</span>
+          <div style={{marginTop:16,color:"rgba(255,255,255,.7)",fontSize:13}}>
+            <AlertCircle size={16} style={{marginRight:6}}/> GPS no disponible en este momento
           </div>
         )}
-        <div style={{position:"absolute",top:10,right:10,background:"rgba(0,0,0,.65)",borderRadius:8,padding:"4px 10px",color:"#fff",fontSize:13,fontWeight:700}}>
+        <div style={{position:"absolute",top:10,right:12,background:"rgba(0,0,0,.35)",borderRadius:8,padding:"4px 10px",color:"#fff",fontSize:13,fontWeight:700}}>
           {hora} hrs
         </div>
       </div>
