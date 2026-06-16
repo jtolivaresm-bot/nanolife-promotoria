@@ -109,7 +109,12 @@ const haversine=(a,b,c,d)=>{const R=6371000,r=x=>x*Math.PI/180,da=r(c-a),db=r(d-
 function getGPS(){
   return new Promise(res=>{
     if(!navigator.geolocation)return res(null);
-    navigator.geolocation.getCurrentPosition(p=>res({lat:p.coords.latitude,lng:p.coords.longitude,acc:Math.round(p.coords.accuracy)}),()=>res(null),{enableHighAccuracy:true,timeout:8000,maximumAge:0});
+    const timer = setTimeout(()=>res(null), 4000); // 4s máximo
+    navigator.geolocation.getCurrentPosition(
+      p=>{ clearTimeout(timer); res({lat:p.coords.latitude,lng:p.coords.longitude,acc:Math.round(p.coords.accuracy)}); },
+      ()=>{ clearTimeout(timer); res(null); },
+      {enableHighAccuracy:true,timeout:4000,maximumAge:30000}
+    );
   });
 }
 
@@ -119,6 +124,64 @@ function compressImage(file){
     r.onload=e=>res(e.target.result);
     r.onerror=rej; r.readAsDataURL(file);
   });
+}
+
+// Sube un archivo directamente a Drive desde el navegador
+// Evita el error de cuota de service account
+async function uploadToDriveDirect(dataUrl, fileName, folderId, mimeType) {
+  // 1. Obtener token temporal
+  const tokenRes = await fetch("/.netlify/functions/drive-token");
+  if (!tokenRes.ok) throw new Error("No se pudo obtener token: " + await tokenRes.text());
+  const { token } = await tokenRes.json();
+
+  // 2. Parsear base64
+  const matches = dataUrl.match(/^data:([^;]+);base64,(.+)$/s);
+  if (!matches) throw new Error("dataUrl inválido");
+  const mime = mimeType || matches[1];
+  const bytes = Uint8Array.from(atob(matches[2]), c => c.charCodeAt(0));
+
+  // 3. Iniciar upload resumable directamente desde el navegador
+  const initRes = await fetch(
+    "https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&supportsAllDrives=true",
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+        "X-Upload-Content-Type": mime,
+        "X-Upload-Content-Length": bytes.length,
+      },
+      body: JSON.stringify({ name: fileName, parents: [folderId] }),
+    }
+  );
+  if (!initRes.ok) throw new Error("Init upload failed: " + initRes.status + " " + await initRes.text());
+
+  const uploadUrl = initRes.headers.get("Location");
+  if (!uploadUrl) throw new Error("No upload URL");
+
+  // 4. Subir el archivo
+  const uploadRes = await fetch(uploadUrl, {
+    method: "PUT",
+    headers: { "Content-Type": mime },
+    body: bytes,
+  });
+  if (!uploadRes.ok) throw new Error("Upload failed: " + uploadRes.status + " " + await uploadRes.text());
+
+  const file = await uploadRes.json();
+
+  // 5. Hacer público (reader)
+  try {
+    await fetch(
+      `https://www.googleapis.com/drive/v3/files/${file.id}/permissions?supportsAllDrives=true`,
+      {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ role: "reader", type: "anyone" }),
+      }
+    );
+  } catch {}
+
+  return { fileId: file.id, webViewLink: file.webViewLink || `https://drive.google.com/file/d/${file.id}/view` };
 }
 
 function loadDB(){try{const r=localStorage.getItem(STORAGE_KEY);return r?JSON.parse(r):null;}catch{return null;}}
@@ -854,18 +917,29 @@ function Marcar({ rec, updateRec, sala, cfg, turno, comm }) {
     return (typeof s === "number" ? s : 0) > 0;
   });
 
-  const [gpsPreview, setGpsPreview] = useState(null); // {lat,lng,acc,tipo} — pantalla de confirmación
+  const [gpsPreview, setGpsPreview] = useState(null);
+  const gpsCacheRef = useRef(null); // GPS prefetcheado en background
+
+  // Prefetch GPS en background cuando aparece la pantalla de salida
+  // así cuando el promotor toca "Marcar salida" ya está listo
+  useEffect(() => {
+    const needsGps = (tr.entrada && !tr.salida);
+    if (!needsGps) return;
+    let cancelled = false;
+    gpsCacheRef.current = null;
+    getGPS().then(gps => {
+      if (!cancelled) gpsCacheRef.current = gps;
+    });
+    return () => { cancelled = true; };
+  }, [!!tr.entrada, !!tr.salida]);
 
   async function iniciarMarcacion(tipo) {
     setLoading(true);
-    const gps = await getGPS();
+    // Usar GPS prefetcheado si está disponible, sino esperar
+    const gps = gpsCacheRef.current || await getGPS();
+    gpsCacheRef.current = null;
     setLoading(false);
-    if (gps) {
-      setGpsPreview({ ...gps, tipo });
-    } else {
-      // Sin GPS — confirmar igual sin coordenadas
-      setGpsPreview({ lat:null, lng:null, acc:null, tipo });
-    }
+    setGpsPreview({ ...(gps || { lat:null, lng:null, acc:null }), tipo });
   }
 
   async function confirmarMarcacion() {
@@ -939,12 +1013,8 @@ function Marcar({ rec, updateRec, sala, cfg, turno, comm }) {
             const prod = PRODUCTOS.find(p=>p.id===prodId);
             const fileName = `${todayISO()}_${promotorObj.nombre.replace(/ /g,"_")}_${sala.codigo||sala.id}_${(prod?.nombre||prodId).replace(/ /g,"_")}.jpg`;
             try {
-              const fotoRes = await fetch("/.netlify/functions/drive-upload", {
-                method:"POST", headers:{"Content-Type":"application/json"},
-                body: JSON.stringify({ dataUrl, fileName, folderId:"1SSaJ_YJIhiVouHUzxfU1n273tK_aR7D7" })
-              });
-              if(fotoRes.ok) { const {fileId}=await fotoRes.json(); console.log(`✓ Foto: ${fileName} (${fileId})`); }
-              else console.error(`✗ Foto ${fileName}:`, await fotoRes.text());
+              const {fileId} = await uploadToDriveDirect(dataUrl, fileName, "1SSaJ_YJIhiVouHUzxfU1n273tK_aR7D7");
+              console.log(`✓ Foto: ${fileName} (${fileId})`);
             } catch(e) { console.error(`✗ Foto ${fileName}:`, e.message); }
           }
         }
@@ -1322,10 +1392,8 @@ function AudioCierre({ rec, updateRec }) {
             const prom=PROMOTORES.find(p=>p.id===r.promotorId)||{nombre:"Promotor"};
             const sala=SALAS.find(s=>s.id===prom.salaId);
             const fileName=`${r.fecha}_${prom.nombre.replace(/ /g,"_")}_cierre.webm`;
-            fetch("/.netlify/functions/drive-upload",{
-              method:"POST",headers:{"Content-Type":"application/json"},
-              body:JSON.stringify({dataUrl,fileName,folderId:"1H_VkKpCwXnZISX-OAvhZnFF42uGRxwt2",mimeType:"audio/webm"})
-            }).then(res=>res.json()).then(({webViewLink})=>{
+            uploadToDriveDirect(dataUrl, fileName, "1H_VkKpCwXnZISX-OAvhZnFF42uGRxwt2", "audio/webm")
+            .then(({webViewLink})=>{
               const comm=calcDia(r);
               fetch("/.netlify/functions/sheets-append",{
                 method:"POST",headers:{"Content-Type":"application/json"},
