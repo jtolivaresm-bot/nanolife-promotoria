@@ -54,8 +54,11 @@ let SALAS = [
 // El promotor DEMO siempre está disponible y no se sobreescribe con el sheet.
 const PROMOTOR_DEMO = {
   id:"udemo", nombre:"Promotor Ejemplo ⭐", rut:"111111111",
-  // salaId_DDMMM para cada día posible → siempre sdemo
   _esDemo: true,
+  // Jornadas de ejemplo para toda la campaña
+  salaId_20jun:"sdemo", salaId_21jun:"sdemo",
+  salaId_27jun:"sdemo", salaId_28jun:"sdemo",
+  salaId_04jul:"sdemo", salaId_05jul:"sdemo",
 };
 // Proxy que siempre resuelve salaId a sdemo para cualquier fecha
 function getSalaIdParaHoy(promotor) {
@@ -1379,6 +1382,8 @@ function LoginScreen({ promotores, salas, onLogin, configVersion }) {
     const rutInput = normRut(rut);
     const rutGuardado = normRut(selProm?.rut||"");
     if (!rutInput) { setError("Ingresa tu RUT"); return; }
+    // Si el promotor no tiene RUT configurado en el sheet, bloquear
+    if (!rutGuardado) { setError("Tu RUT no está configurado aún. Contacta a tu coordinador/a."); return; }
     if (rutInput !== rutGuardado) { setError("RUT incorrecto. Intenta de nuevo."); return; }
     setLoading(true);
     setTimeout(()=>{ onLogin(selId); setLoading(false); }, 400);

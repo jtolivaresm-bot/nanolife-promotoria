@@ -117,11 +117,20 @@ export const handler = async (event) => {
       folderId ? buildTraining(tokenDrive, folderId) : Promise.resolve([]),
     ]);
 
-    const promotores = toObjects(promRows).map(p=>({
-      id:     p.id||p.ID,
-      nombre: p.nombre||p.Nombre,
-      salaId: p.salaId||p.SalaID||p.sala_id,
-    })).filter(p=>p.id&&p.nombre);
+    const promotores = toObjects(promRows).map(p=>{
+      // Recoger todas las columnas salaId_DDmmm dinámicamente
+      const fechaCols = {};
+      Object.entries(p).forEach(([k,v])=>{
+        if (k.startsWith("salaId_") && v) fechaCols[k] = v;
+      });
+      return {
+        id:     p.id||p.ID,
+        nombre: p.nombre||p.Nombre,
+        rut:    (p.rut||p.RUT||p.Rut||"").replace(/[.\-\s]/g,"").toUpperCase(),
+        salaId: p.salaId||p.SalaID||p.sala_id||"",
+        ...fechaCols,
+      };
+    }).filter(p=>p.id&&p.nombre);
 
     const salas = toObjects(salaRows).map(s=>({
       id:        s.id||s.ID,
