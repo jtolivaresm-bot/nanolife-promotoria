@@ -126,62 +126,21 @@ function compressImage(file){
   });
 }
 
-// Sube un archivo directamente a Drive desde el navegador
-// Evita el error de cuota de service account
+// Sube archivos a Drive via Google Apps Script (evita CORS y problemas de cuota)
+const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyigkOEq7Y1JyFmUg-gqxIQt6Io95l2hEJQsvjv_fWU5X-J8QwE9Z1UVGx7XjQ7is0/exec";
+
 async function uploadToDriveDirect(dataUrl, fileName, folderId, mimeType) {
-  // 1. Obtener token temporal
-  const tokenRes = await fetch("/.netlify/functions/drive-token");
-  if (!tokenRes.ok) throw new Error("No se pudo obtener token: " + await tokenRes.text());
-  const { token } = await tokenRes.json();
-
-  // 2. Parsear base64
-  const matches = dataUrl.match(/^data:([^;]+);base64,(.+)$/s);
-  if (!matches) throw new Error("dataUrl inválido");
-  const mime = mimeType || matches[1];
-  const bytes = Uint8Array.from(atob(matches[2]), c => c.charCodeAt(0));
-
-  // 3. Iniciar upload resumable directamente desde el navegador
-  const initRes = await fetch(
-    "https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&supportsAllDrives=true",
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json",
-        "X-Upload-Content-Type": mime,
-        "X-Upload-Content-Length": bytes.length,
-      },
-      body: JSON.stringify({ name: fileName, parents: [folderId] }),
-    }
-  );
-  if (!initRes.ok) throw new Error("Init upload failed: " + initRes.status + " " + await initRes.text());
-
-  const uploadUrl = initRes.headers.get("Location");
-  if (!uploadUrl) throw new Error("No upload URL");
-
-  // 4. Subir el archivo
-  const uploadRes = await fetch(uploadUrl, {
-    method: "PUT",
-    headers: { "Content-Type": mime },
-    body: bytes,
+  const tipo = (mimeType||"").includes("audio") ? "audio" : "foto";
+  // mode: no-cors evita bloqueo CORS — fire and forget
+  fetch(APPS_SCRIPT_URL, {
+    method: "POST",
+    mode: "no-cors",
+    headers: { "Content-Type": "text/plain;charset=utf-8" },
+    body: JSON.stringify({ dataUrl, fileName, folderId, tipo }),
   });
-  if (!uploadRes.ok) throw new Error("Upload failed: " + uploadRes.status + " " + await uploadRes.text());
-
-  const file = await uploadRes.json();
-
-  // 5. Hacer público (reader)
-  try {
-    await fetch(
-      `https://www.googleapis.com/drive/v3/files/${file.id}/permissions?supportsAllDrives=true`,
-      {
-        method: "POST",
-        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ role: "reader", type: "anyone" }),
-      }
-    );
-  } catch {}
-
-  return { fileId: file.id, webViewLink: file.webViewLink || `https://drive.google.com/file/d/${file.id}/view` };
+  // Retornamos inmediatamente sin esperar respuesta (no-cors no permite leerla)
+  console.log(`↑ Enviando ${tipo}: ${fileName}`);
+  return { fileId: null, webViewLink: null };
 }
 
 function loadDB(){try{const r=localStorage.getItem(STORAGE_KEY);return r?JSON.parse(r):null;}catch{return null;}}
@@ -981,8 +940,8 @@ function Marcar({ rec, updateRec, sala, cfg, turno, comm, pid }) {
           turno: turno.toUpperCase(),
           tipo: tipo==="entrada"?"Entrada":"Salida",
           hora: hhmm(stamp.ts),
-          lat: stamp.lat??"",
-          lng: stamp.lng??"",
+          lat: stamp.lat!=null ? stamp.lat.toFixed(6) : "",
+          lng: stamp.lng!=null ? stamp.lng.toFixed(6) : "",
           acc: stamp.acc??"",
           dist: "",
           enLocal: "",
@@ -1402,21 +1361,21 @@ function AudioCierre({ rec, updateRec }) {
           const dataUrl=ev.target.result;
           setAudioURL(URL.createObjectURL(blob));
           updateRec(r=>{
-            const prom=PROMOTORES.find(p=>p.id===r.promotorId)||{nombre:"Promotor"};
-            const sala=SALAS.find(s=>s.id===prom.salaId);
+            const prom = pid==="udemo" ? PROMOTOR_DEMO : PROMOTORES.find(p=>p.id===r.promotorId)||{nombre:"Promotor"};
+            const salaObj=SALAS.find(s=>s.id===getSalaIdParaHoy(prom));
             const fileName=`${r.fecha}_${prom.nombre.replace(/ /g,"_")}_cierre.webm`;
-            uploadToDriveDirect(dataUrl, fileName, "1H_VkKpCwXnZISX-OAvhZnFF42uGRxwt2", "audio/webm")
-            .then(({webViewLink})=>{
-              const comm=calcDia(r);
-              fetch("/.netlify/functions/sheets-append",{
-                method:"POST",headers:{"Content-Type":"application/json"},
-                body:JSON.stringify({sheet:"Cierres",row:{
-                  fecha:r.fecha, promotor:prom.nombre,
-                  sala:sala?.nombre||"", ciudad:sala?.ciudad||"",
-                  comisionAM:comm.am.base, comisionPM:comm.pm.base,
-                  comisionTotalDia:comm.total, audioUrl:webViewLink||""
-                }})
-              }).catch(()=>{});
+            // Subir audio (fire and forget — no-cors no permite leer respuesta)
+            uploadToDriveDirect(dataUrl, fileName, "1H_VkKpCwXnZISX-OAvhZnFF42uGRxwt2", "audio/webm");
+            // Registrar cierre en Sheets inmediatamente
+            const comm=calcDia(r);
+            fetch("/.netlify/functions/sheets-append",{
+              method:"POST",headers:{"Content-Type":"application/json"},
+              body:JSON.stringify({sheet:"Cierres",row:{
+                fecha:r.fecha, promotor:prom.nombre,
+                sala:salaObj?.nombre||"", ciudad:salaObj?.ciudad||"",
+                comisionAM:comm.am.base, comisionPM:comm.pm.base,
+                comisionTotalDia:comm.total, audioUrl:""
+              }})
             }).catch(()=>{});
             return{...r,audio:{dur:secs,ts:Date.now()}};
           });
