@@ -21,6 +21,8 @@ let STOCK_SALAS = {
   s08: { p1:{gondola:12,bodega:6},  p2:{gondola:10,bodega:4}, p3:{gondola:10,bodega:0},  p4:{gondola:8,bodega:4},  p5:{gondola:4,bodega:0}  },
   s09: { p1:{gondola:14,bodega:8},  p2:{gondola:12,bodega:6}, p3:{gondola:8,bodega:4},   p4:{gondola:10,bodega:0}, p5:{gondola:6,bodega:2}  },
   s10: { p1:{gondola:10,bodega:0},  p2:{gondola:8,bodega:4},  p3:{gondola:12,bodega:0},  p4:{gondola:6,bodega:0},  p5:{gondola:4,bodega:0}  },
+  // Sala DEMO — siempre disponible para capacitación
+  sdemo: { p1:{gondola:24,bodega:12}, p2:{gondola:18,bodega:6}, p3:{gondola:20,bodega:8}, p4:{gondola:15,bodega:5}, p5:{gondola:10,bodega:4} },
 };
 
 const PRODUCTOS = [
@@ -43,14 +45,36 @@ let SALAS = [
   { id:"s08", codigo:"095", nombre:"Hiper Lider - Alessandri",   ciudad:"La Reina",     lat:-33.4580,lng:-70.5527, reponedor:"CAMILA GONZALES",    fono:"56946853781",   productos:null },
   { id:"s09", codigo:"097", nombre:"Hiper Lider - Las Condes",    ciudad:"Lo Barnechea", lat:-33.3682,lng:-70.5039, reponedor:"EDUARDO MARTINEZ",   fono:"56966334302",   productos:null },
   { id:"s10", codigo:"120", nombre:"Hiper Lider - Gabriela Mistral",  ciudad:"Temuco",       lat:-38.7408,lng:-72.5990, reponedor:"ILSE DIAZ",          fono:"56991312037",   productos:null },
+  // Sala DEMO — siempre disponible, no depende del sheet
+  { id:"sdemo", codigo:"DEMO", nombre:"Hiper Lider - Sala Ejemplo", ciudad:"Santiago", lat:-33.4372,lng:-70.6506, reponedor:"CARLOS DEMO", fono:"56912345678", productos:null },
 ];
 
 // Promotores, Salas y Stock se cargan desde Google Sheets al abrir la app.
 // Estos valores son el fallback mientras carga (o si hay error de red).
+// El promotor DEMO siempre está disponible y no se sobreescribe con el sheet.
+const PROMOTOR_DEMO = {
+  id:"udemo", nombre:"Promotor Ejemplo ⭐", rut:"111111111",
+  // salaId_DDMMM para cada día posible → siempre sdemo
+  _esDemo: true,
+};
+// Proxy que siempre resuelve salaId a sdemo para cualquier fecha
+function getSalaIdParaHoy(promotor) {
+  if (!promotor) return null;
+  if (promotor._esDemo) return "sdemo";
+  const d = new Date();
+  const dia = String(d.getDate()).padStart(2,"0");
+  const meses = ["jan","feb","mar","apr","may","jun","jul","aug","sep","oct","nov","dec"];
+  const mes = meses[d.getMonth()];
+  const key = `salaId_${dia}${mes}`;
+  if (promotor[key]) return promotor[key];
+  if (promotor.salaId) return promotor.salaId;
+  return null;
+}
+
 let PROMOTORES = [
-  { id:"u1", nombre:"Camila Rojas",  salaId:"s07" },
-  { id:"u2", nombre:"Diego Fuentes", salaId:"s08" },
-  { id:"u3", nombre:"Valentina Soto",salaId:"s06" },
+  { id:"u1", nombre:"Camila Rojas",  rut:"",  salaId:"s07" },
+  { id:"u2", nombre:"Diego Fuentes", rut:"",  salaId:"s08" },
+  { id:"u3", nombre:"Valentina Soto",rut:"",  salaId:"s06" },
 ];
 
 // categoria: "marca" | "limpiapisos" | "detergente"
@@ -295,22 +319,6 @@ function ShiftRing({ pct, size=86 }) {
   );
 }
 
-// Obtiene la salaId del promotor según la fecha actual
-// El sheet tiene columnas: salaId_19jun, salaId_20jun, salaId_26jun, salaId_27jun, salaId_03jul, salaId_04jul
-function getSalaIdParaHoy(promotor) {
-  if (!promotor) return null;
-  // Primero buscar columna específica para hoy
-  const d = new Date();
-  const dia = String(d.getDate()).padStart(2,"0");
-  const meses = ["jan","feb","mar","apr","may","jun","jul","aug","sep","oct","nov","dec"];
-  const mes = meses[d.getMonth()];
-  const key = `salaId_${dia}${mes}`;
-  if (promotor[key]) return promotor[key];
-  // Fallback: salaId genérico (compatibilidad con formato anterior)
-  if (promotor.salaId) return promotor.salaId;
-  return null;
-}
-
 // Normaliza RUT: quita puntos, guion, espacios y pone K en mayúscula
 function normRut(r) {
   return r.replace(/[.\-\s]/g,"").toUpperCase();
@@ -340,7 +348,11 @@ export default function App() {
     fetch("/.netlify/functions/config-reader")
       .then(r=>r.ok ? r.json() : Promise.reject(r.status))
       .then(({promotores, salas, stock, training})=>{
-        if(promotores?.length) PROMOTORES.splice(0, PROMOTORES.length, ...promotores);
+        if(promotores?.length) {
+          PROMOTORES.splice(0, PROMOTORES.length, ...promotores);
+          // El promotor DEMO siempre está al final, nunca se sobreescribe
+          if (!PROMOTORES.find(p=>p.id==="udemo")) PROMOTORES.push(PROMOTOR_DEMO);
+        }
         if(salas?.length)      SALAS.splice(0, SALAS.length, ...salas);
         if(stock && Object.keys(stock).length) {
           Object.keys(STOCK_SALAS).forEach(k=>delete STOCK_SALAS[k]);
@@ -392,7 +404,11 @@ export default function App() {
   if(!pid) return (
     <div className="nl-root"><style>{CSS}</style>
       <div className="nl-phone">
-        <LoginScreen promotores={PROMOTORES} salas={SALAS} onLogin={id=>{setPid(id); localStorage.setItem("nanolife_pid",id);}} configVersion={configVersion}/>
+        <LoginScreen
+          promotores={[...PROMOTORES.filter(p=>p.id!=="udemo"), PROMOTOR_DEMO]}
+          salas={SALAS}
+          onLogin={id=>{setPid(id); localStorage.setItem("nanolife_pid",id);}}
+          configVersion={configVersion}/>
       </div>
     </div>
   );
@@ -497,8 +513,19 @@ function Inicio({ rec, comm, steps, doneCount, pct, fecha, sala, setTab, setTurn
     <>
       <div className="sec-title" style={{marginTop:16,textTransform:"capitalize"}}>{fechaTxt}</div>
 
+      {/* Sin jornada hoy */}
+      {!sala && (
+        <div style={{background:"#FEF3E2",border:"1px solid #F5C842",borderRadius:16,padding:"16px",marginTop:10,display:"flex",gap:12,alignItems:"flex-start"}}>
+          <span style={{fontSize:28,flexShrink:0}}>📅</span>
+          <div>
+            <div style={{fontWeight:700,fontSize:15,color:"#92610A",marginBottom:4}}>No tienes jornada asignada hoy</div>
+            <div style={{fontSize:13,color:"#A07020",lineHeight:1.5}}>Tu próxima jornada es el viernes o sábado según el calendario de la campaña. Puedes revisar el material de capacitación mientras tanto.</div>
+          </div>
+        </div>
+      )}
+
       {/* SALA ASIGNADA */}
-      <div style={{background:"var(--surface)",border:"1px solid var(--line)",borderRadius:16,padding:"14px",marginTop:10,display:"flex",alignItems:"center",gap:12}}>
+      {sala && <div style={{background:"var(--surface)",border:"1px solid var(--line)",borderRadius:16,padding:"14px",marginTop:10,display:"flex",alignItems:"center",gap:12}}>
         <div style={{width:40,height:40,borderRadius:11,background:"#E4F4F1",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
           <Store size={19} color="var(--teal)"/>
         </div>
@@ -507,7 +534,10 @@ function Inicio({ rec, comm, steps, doneCount, pct, fecha, sala, setTab, setTurn
           <div style={{fontWeight:700,fontSize:14,lineHeight:1.25}}>{sala?.nombre || "—"}</div>
           <div className="muted" style={{fontSize:12,marginTop:1}}>{sala?.ciudad}{sala?.codigo ? ` · Sala ${sala.codigo}` : ""}</div>
         </div>
-      </div>
+      </div>}
+
+      {/* TODO LO SIGUIENTE SOLO SI HAY JORNADA HOY */}
+      {sala && <>
 
       {/* JORNADA RING */}
       <div className="card">
@@ -574,11 +604,23 @@ function Inicio({ rec, comm, steps, doneCount, pct, fecha, sala, setTab, setTurn
           ⚠️ Las comisiones serán confirmadas según la venta reportada por sistema. Este es un cálculo preliminar.
         </div>
       </div>
+
+      </>} {/* fin guard sala */}
+
+      {/* Capacitación siempre visible */}
+      {!sala && (
+        <div className="card" style={{marginTop:14,display:"flex",alignItems:"center",gap:12,cursor:"pointer",background:"#E4F4F1",border:"none"}}
+          onClick={()=>{}}>
+          <GraduationCap size={22} color="var(--teal)"/>
+          <div>
+            <div style={{fontWeight:600,fontSize:14,color:"var(--teal-d)"}}>Revisa el material de capacitación</div>
+            <div className="muted" style={{fontSize:12}}>Disponible en la pestaña Capacitación</div>
+          </div>
+        </div>
+      )}
     </>
   );
-}
-
-function MiniStat({icon:Ic,label,val,accent}){
+}({icon:Ic,label,val,accent}){
   return(
     <div style={{flex:1}}>
       <div className="muted" style={{fontSize:10.5,display:"flex",alignItems:"center",gap:3}}><Ic size={11}/> {label}</div>
@@ -1158,23 +1200,35 @@ function LoginScreen({ promotores, salas, onLogin, configVersion }) {
             {promotores.length === 0 && (
               <div className="empty">Cargando promotores… <br/><span style={{fontSize:12}}>Si esto demora, verifica la conexión.</span></div>
             )}
-            {promotores.map(p=>{
+            {[...promotores.filter(p=>!p._esDemo), ...(promotores.find(p=>p._esDemo) ? [] : [PROMOTOR_DEMO])].map((p,idx,arr)=>{
               const sl = salas.find(s=>s.id===getSalaIdParaHoy(p));
+              const isDemo = p._esDemo || p.id==="udemo";
+              // Separador antes del demo
+              const showSep = isDemo && arr.filter(x=>!x._esDemo && x.id!=="udemo").length > 0;
               return (
-                <button key={p.id} onClick={()=>handleSelectNombre(p.id)}
-                  style={{width:"100%",background:"var(--surface)",border:"1px solid var(--line)",borderRadius:16,padding:"14px 16px",display:"flex",alignItems:"center",gap:12,cursor:"pointer",textAlign:"left",marginBottom:10,boxShadow:"0 1px 3px rgba(11,42,45,.06)"}}>
-                  <div className="av" style={{background:"#E4F4F1",color:"var(--teal)",border:"1.5px solid var(--mint)",width:44,height:44,flexShrink:0,borderRadius:"50%",display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700,fontSize:15}}>
-                    {p.nombre.split(" ").map(w=>w[0]).join("").slice(0,2)}
-                  </div>
-                  <div style={{flex:1}}>
-                    <div style={{fontWeight:700,fontSize:15,color:"var(--ink)"}}>{p.nombre}</div>
-                    <div className="muted" style={{fontSize:12,marginTop:2,display:"flex",alignItems:"center",gap:4}}>
-                      <Store size={11}/>
-                      {sl ? sl.nombre.replace("Hiper Lider - ","").replace("Lider Express - ","") : "Sin jornada hoy"}
+                <div key={p.id}>
+                  {showSep && (
+                    <div style={{display:"flex",alignItems:"center",gap:10,margin:"14px 0 8px"}}>
+                      <div style={{flex:1,height:1,background:"var(--line)"}}/>
+                      <span style={{fontSize:11,color:"var(--muted)",fontWeight:600,letterSpacing:".06em"}}>MODO DEMO</span>
+                      <div style={{flex:1,height:1,background:"var(--line)"}}/>
                     </div>
-                  </div>
-                  <ChevronRight size={18} color="var(--muted)"/>
-                </button>
+                  )}
+                  <button onClick={()=>handleSelectNombre(p.id)}
+                    style={{width:"100%",background:isDemo?"#FFF8E7":"var(--surface)",border:isDemo?"1.5px dashed #F5A623":"1px solid var(--line)",borderRadius:16,padding:"14px 16px",display:"flex",alignItems:"center",gap:12,cursor:"pointer",textAlign:"left",marginBottom:10,boxShadow:"0 1px 3px rgba(11,42,45,.06)"}}>
+                    <div className="av" style={{background:isDemo?"#FEF3E2":"#E4F4F1",color:isDemo?"#92610A":"var(--teal)",border:isDemo?"1.5px solid #F5A623":"1.5px solid var(--mint)",width:44,height:44,flexShrink:0,borderRadius:"50%",display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700,fontSize:15}}>
+                      {isDemo ? "⭐" : p.nombre.split(" ").map(w=>w[0]).join("").slice(0,2)}
+                    </div>
+                    <div style={{flex:1}}>
+                      <div style={{fontWeight:700,fontSize:15,color:isDemo?"#92610A":"var(--ink)"}}>{p.nombre}</div>
+                      <div className="muted" style={{fontSize:12,marginTop:2,display:"flex",alignItems:"center",gap:4}}>
+                        <Store size={11}/>
+                        {sl ? sl.nombre.replace("Hiper Lider - ","").replace("Lider Express - ","") : isDemo ? "Sala de ejemplo" : "Sin jornada hoy"}
+                      </div>
+                    </div>
+                    <ChevronRight size={18} color={isDemo?"#F5A623":"var(--muted)"}/>
+                  </button>
+                </div>
               );
             })}
           </>
@@ -1199,13 +1253,18 @@ function LoginScreen({ promotores, salas, onLogin, configVersion }) {
 
             <label className="field-lbl">RUT (sin puntos ni guión)</label>
             <input className="inp" type="text" inputMode="numeric"
-              placeholder="Ej: 208583662"
+              placeholder={selProm?._esDemo ? "111111111" : "Ej: 208583662"}
               value={rut}
               onChange={e=>{setRut(e.target.value);setError("");}}
               onKeyDown={e=>e.key==="Enter"&&handleLogin()}
               style={{fontSize:18,letterSpacing:2,textAlign:"center"}}
               autoFocus
             />
+            {selProm?._esDemo && (
+              <div style={{fontSize:12,color:"#92610A",textAlign:"center",marginTop:6,background:"#FEF3E2",borderRadius:8,padding:"6px 12px"}}>
+                RUT de acceso demo: <b>111111111</b>
+              </div>
+            )}
             {error && (
               <div style={{display:"flex",alignItems:"center",gap:8,padding:"10px",background:"#FEE2E2",borderRadius:10,marginTop:10}}>
                 <AlertCircle size={15} color="#DC2626"/>
