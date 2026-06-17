@@ -1601,7 +1601,7 @@ function LoginScreen({ promotores, salas, onLogin, configVersion }) {
 
             <label className="field-lbl">RUT (sin puntos ni guión)</label>
             <input className="inp" type="text" inputMode="numeric"
-              placeholder={selProm?._esDemo ? "987654321" : "Ej: 208583662"}
+              placeholder={selProm?._esDemo ? "987654321" : "Ej: 123456789"}
               value={rut}
               onChange={e=>{setRut(e.target.value);setError("");}}
               onKeyDown={e=>e.key==="Enter"&&handleLogin()}
