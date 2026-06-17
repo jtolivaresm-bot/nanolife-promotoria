@@ -52,7 +52,7 @@ let SALAS = [
 // Estos valores son el fallback mientras carga (o si hay error de red).
 // El promotor DEMO siempre está disponible y no se sobreescribe con el sheet.
 const PROMOTOR_DEMO = {
-  id:"udemo", nombre:"Promotor Ejemplo ⭐", rut:"111111111",
+  id:"udemo", nombre:"Promotor Ejemplo ⭐", rut:"987654321",
   _esDemo: true,
   // Jornadas de ejemplo para toda la campaña
   salaId_20jun:"sdemo", salaId_21jun:"sdemo",
@@ -175,11 +175,14 @@ function calcDia(rec){
   return{am,pm,ventasTotal:am.ventasTotal+pm.ventasTotal,base:am.base+pm.base,unidades:am.unidades+pm.unidades,total:am.base+pm.base};
 }
 
-function jornadaSteps(rec, sala){
-  const prods = sala?.productos ? PRODUCTOS.filter(p=>sala.productos.includes(p.id)) : PRODUCTOS;
+function jornadaSteps(rec, sala, prods){
+  const productos = prods || (sala?.productos ? PRODUCTOS.filter(p=>sala.productos.includes(p.id)) : PRODUCTOS);
   const amT = rec.turnos.am;
   const pmT = rec.turnos.pm;
-  const fotosOk = prods.every(p => amT.fotosProducto?.[p.id]);
+  const fotosGuardadas = Object.values(amT.fotosProducto||{}).filter(Boolean).length;
+  // Si hay entrada AM y al menos una foto, consideramos fotos OK
+  // (evita falsos negativos cuando el stock cambia entre sesiones)
+  const fotosOk = !!amT.entrada && fotosGuardadas > 0;
   const ventasAM = Object.values(amT.cantidades||{}).reduce((s,q)=>s+(q||0),0)>0;
   const ventasPM = Object.values(pmT.cantidades||{}).reduce((s,q)=>s+(q||0),0)>0;
   return [
@@ -414,7 +417,20 @@ export default function App() {
   },[rid,pid,fecha]);
 
   const comm = useMemo(()=>calcDia(rec),[rec]);
-  const steps = useMemo(()=>jornadaSteps(rec,sala),[rec,sala]);
+  // Calcular prods filtrados por stock (mismo filtro que Marcar e Inicio)
+  const prodsApp = useMemo(()=>{
+    if (!sala) return PRODUCTOS;
+    const stock = STOCK_SALAS[sala.id] || {};
+    const stockVacio = Object.keys(stock).length===0 || Object.values(stock).every(v=>(typeof v==="number"?v:0)===0);
+    return PRODUCTOS.filter(p=>{
+      if (sala.productos && !sala.productos.includes(p.id)) return false;
+      if (stockVacio) return true;
+      const s = stock[p.id];
+      if (s===undefined||s===null) return true;
+      return (typeof s==="number"?s:0) > 0;
+    });
+  },[sala, configVersion]);
+  const steps = useMemo(()=>jornadaSteps(rec,sala,prodsApp),[rec,sala,prodsApp]);
   const doneCount = steps.filter(s=>s.done).length;
   const pct = doneCount/steps.length;
 
@@ -1213,25 +1229,22 @@ function GpsConfirm({ gps, sala, turno, onConfirmar, onCancelar }) {
     <div style={{marginTop:16}}>
       <div className="sec-title">Confirmar {tipoLabel} {tt.label}</div>
 
-      {/* Ubicación */}
-      <div style={{borderRadius:16,overflow:"hidden",marginTop:10,background:"linear-gradient(135deg,#0A4C52,#0E6F76)",position:"relative",padding:"20px 16px",minHeight:160,display:"flex",flexDirection:"column",justifyContent:"space-between"}}>
-        <div style={{display:"flex",alignItems:"center",gap:8}}>
-          <MapPin size={18} color="rgba(255,255,255,.9)"/>
-          <span style={{color:"rgba(255,255,255,.9)",fontSize:13,fontWeight:600}}>Tu ubicación en este momento</span>
-        </div>
+      {/* Mapa */}
+      <div style={{borderRadius:16,overflow:"hidden",marginTop:10,position:"relative",height:200,background:"#e8f0f0"}}>
         {gps.lat ? (
-          <div style={{marginTop:16}}>
-            <div style={{fontFamily:"monospace",fontSize:13,color:"rgba(255,255,255,.85)",lineHeight:2}}>
-              <div>📍 {gps.lat.toFixed(5)}, {gps.lng.toFixed(5)}</div>
-              <div style={{fontSize:11,opacity:.7}}>Precisión: ±{gps.acc} metros</div>
-            </div>
-          </div>
+          <iframe
+            title="mapa"
+            width="100%"
+            height="200"
+            style={{border:"none",display:"block"}}
+            src={`https://www.openstreetmap.org/export/embed.html?bbox=${gps.lng-0.002},${gps.lat-0.002},${gps.lng+0.002},${gps.lat+0.002}&layer=mapnik&marker=${gps.lat},${gps.lng}`}
+          />
         ) : (
-          <div style={{marginTop:16,color:"rgba(255,255,255,.7)",fontSize:13}}>
-            <AlertCircle size={16} style={{marginRight:6}}/> GPS no disponible en este momento
+          <div style={{height:"100%",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:8,color:"var(--muted)"}}>
+            <AlertCircle size={28}/><span style={{fontSize:13}}>GPS no disponible</span>
           </div>
         )}
-        <div style={{position:"absolute",top:10,right:12,background:"rgba(0,0,0,.35)",borderRadius:8,padding:"4px 10px",color:"#fff",fontSize:13,fontWeight:700}}>
+        <div style={{position:"absolute",top:10,right:10,background:"rgba(0,0,0,.65)",borderRadius:8,padding:"4px 10px",color:"#fff",fontSize:13,fontWeight:700,pointerEvents:"none"}}>
           {hora} hrs
         </div>
       </div>
@@ -1272,17 +1285,14 @@ function GpsConfirm({ gps, sala, turno, onConfirmar, onCancelar }) {
 function GPSChip({ data, sala }) {
   if(!data?.lat) return <span className="muted" style={{fontSize:11.5,display:"flex",alignItems:"center",gap:4}}><AlertCircle size={11}/> Sin GPS</span>;
   const esDemo = sala?.id==="sdemo";
-  const tolerancia = esDemo ? 999999 : 200;
-  const enLocal = sala && data.dist!=null && data.dist<=tolerancia;
   if (esDemo) return (
     <span className="chip chip-ok" style={{marginTop:2,fontSize:11}}>
       <CheckCircle2 size={12}/> En el local (demo)
     </span>
   );
   return (
-    <span className={`chip ${enLocal?"chip-ok":"chip-warn"}`} style={{marginTop:2,fontSize:11}}>
-      {enLocal?<CheckCircle2 size={12}/>:<AlertCircle size={12}/>}
-      {enLocal?"En el local":`A ${data.dist} m`}
+    <span className="chip chip-ok" style={{marginTop:2,fontSize:11}}>
+      <CheckCircle2 size={12}/> GPS registrado · {parseFloat(data.lat).toFixed(4)}, {parseFloat(data.lng).toFixed(4)}
     </span>
   );
 }
@@ -1591,7 +1601,7 @@ function LoginScreen({ promotores, salas, onLogin, configVersion }) {
 
             <label className="field-lbl">RUT (sin puntos ni guión)</label>
             <input className="inp" type="text" inputMode="numeric"
-              placeholder={selProm?._esDemo ? "111111111" : "Ej: 208583662"}
+              placeholder={selProm?._esDemo ? "987654321" : "Ej: 208583662"}
               value={rut}
               onChange={e=>{setRut(e.target.value);setError("");}}
               onKeyDown={e=>e.key==="Enter"&&handleLogin()}
@@ -1600,7 +1610,7 @@ function LoginScreen({ promotores, salas, onLogin, configVersion }) {
             />
             {selProm?._esDemo && (
               <div style={{fontSize:12,color:"#92610A",textAlign:"center",marginTop:6,background:"#FEF3E2",borderRadius:8,padding:"6px 12px"}}>
-                RUT de acceso demo: <b>111111111</b>
+                RUT de acceso demo: <b>987654321</b>
               </div>
             )}
             {error && (
