@@ -931,13 +931,11 @@ function Marcar({ rec, updateRec, sala, cfg, turno, comm, pid }) {
     const stamp = { ts:Date.now() };
     if (lat) { stamp.lat=lat; stamp.lng=lng; stamp.acc=acc; }
 
-    // Capturar fotos y cantidades ANTES de updateRec
-    const fotosActuales = tipo==="salida" && turno==="am"
+    // Capturar fotos ANTES de updateRec
+    const fotosActuales = tipo==="entrada" && turno==="am"
       ? { ...rec.turnos.am.fotosProducto }
       : {};
-    const cantidadesActuales = tipo==="salida"
-      ? { ...rec.turnos[turno].cantidades }
-      : {};
+    const cantidadesActuales = {}; // ya no se usan ventas manuales
 
     // Guardar localmente
     updateRec(r=>({...r, turnos:{...r.turnos,[turno]:{...r.turnos[turno],[tipo]:stamp}}}));
@@ -965,41 +963,18 @@ function Marcar({ rec, updateRec, sala, cfg, turno, comm, pid }) {
       });
       if(!marcRes.ok) console.error("Sheets marcacion error:", await marcRes.text());
 
-      if (tipo==="salida") {
-        // 2. Ventas → Sheets
-        const rows = PRODUCTOS.filter(p=>cantidadesActuales[p.id]>0).map(p=>({
-          fecha: todayISO(),
-          promotor: promotorObj.nombre,
-          sala: sala.nombre,
-          ciudad: sala.ciudad,
-          turno: turno.toUpperCase(),
-          producto: p.nombre,
-          unidades: cantidadesActuales[p.id],
-          precio: p.precio,
-          comisionUnit: p.comision,
-          comisionTotal: cantidadesActuales[p.id]*p.comision,
-        }));
-        if(rows.length>0) {
-          const ventasRes = await fetch("/.netlify/functions/sheets-append", {
-            method:"POST", headers:{"Content-Type":"application/json"},
-            body: JSON.stringify({ sheet:"Ventas", rows })
-          });
-          if(!ventasRes.ok) console.error("Sheets ventas error:", await ventasRes.text());
-        }
-
-        // 3. Fotos → Drive (solo salida AM)
-        if (turno==="am") {
-          const fotoEntries = Object.entries(fotosActuales).filter(([,v])=>v);
-          for (const [prodId, dataUrl] of fotoEntries) {
-            const prod = PRODUCTOS.find(p=>p.id===prodId);
-            const fileName = `${todayISO()}_${promotorObj.nombre.replace(/ /g,"_")}_${sala.codigo||sala.id}_${(prod?.nombre||prodId).replace(/ /g,"_")}.jpg`;
-            try {
-              const {fileId} = await uploadToDriveDirect(dataUrl, fileName, "1SSaJ_YJIhiVouHUzxfU1n273tK_aR7D7");
-              console.log(`✓ Foto: ${fileName} (${fileId})`);
-            } catch(e) { console.error(`✗ Foto ${fileName}:`, e.message); }
-          }
+      // Fotos → Drive al marcar ENTRADA AM
+      if (tipo==="entrada" && turno==="am") {
+        const fotoEntries = Object.entries(fotosActuales).filter(([,v])=>v);
+        console.log(`↑ Subiendo ${fotoEntries.length} fotos de góndola...`);
+        for (const [prodId, dataUrl] of fotoEntries) {
+          const prod = PRODUCTOS.find(p=>p.id===prodId);
+          const fileName = `${todayISO()}_${promotorObj.nombre.replace(/ /g,"_")}_${sala.codigo||sala.id}_${(prod?.nombre||prodId).replace(/ /g,"_")}.jpg`;
+          uploadToDriveDirect(dataUrl, fileName, "1SSaJ_YJIhiVouHUzxfU1n273tK_aR7D7");
+          console.log(`↑ Enviando foto: ${fileName}`);
         }
       }
+
     } catch(e) { console.error("Sync error:", e); }
 
     setLoading(false);
@@ -1023,19 +998,19 @@ function Marcar({ rec, updateRec, sala, cfg, turno, comm, pid }) {
     <EntradaAM loading={loading} onMarcar={()=>iniciarMarcacion("entrada")}
       sala={sala} tr={tr} prods={prods} updateRec={updateRec}/>
   );
-  // SALIDA AM: ventas + marcar salida
-  if (turno==="am" && tr.entrada && !tr.salida) return (
-    <SalidaConVentas tr={tr} tt={tt} loading={loading} onMarcar={()=>iniciarMarcacion("salida")}
-      prods={prods} updateRec={updateRec} turno="am" rec={rec} sala={sala} comm={comm} tipo="AM" pid={pid}/>
-  );
   // ENTRADA PM: solo botón
   if (turno==="pm" && !tr.entrada) return (
     <MarcarEntrada loading={loading} onMarcar={()=>iniciarMarcacion("entrada")} sala={sala} tipo="PM"/>
   );
-  // SALIDA PM: ventas + audio + marcar salida
+  // SALIDA AM: solo marcación, sin ventas
+  if (turno==="am" && tr.entrada && !tr.salida) return (
+    <SalidaSimple tt={tt} loading={loading} onMarcar={()=>iniciarMarcacion("salida")} tipo="AM"
+      rec={rec} updateRec={updateRec} sala={sala} comm={comm} pid={pid}/>
+  );
+  // SALIDA PM: audio + marcar salida, sin ventas
   if (turno==="pm" && tr.entrada && !tr.salida) return (
-    <SalidaConVentas tr={tr} tt={tt} loading={loading} onMarcar={()=>iniciarMarcacion("salida")}
-      prods={prods} updateRec={updateRec} turno="pm" rec={rec} sala={sala} comm={comm} tipo="PM" pid={pid}/>
+    <SalidaSimple tt={tt} loading={loading} onMarcar={()=>iniciarMarcacion("salida")} tipo="PM"
+      rec={rec} updateRec={updateRec} sala={sala} comm={comm} pid={pid}/>
   );
   return <TurnoCerrado tr={tr} tt={tt} comm={comm} turno={turno} sala={sala} prods={prods}/>;
 }
@@ -1115,6 +1090,41 @@ function MarcarEntrada({ loading, onMarcar, sala, tipo = "AM" }) {
         <button className="btn btn-primary btn-block" disabled={loading} onClick={onMarcar}>
           {loading ? <RefreshCw size={18} className="spin" /> : <LogIn size={18} />}
           {loading ? "Obteniendo ubicación…" : `Marcar entrada ${tipo}`}
+        </button>
+      </div>
+    </>
+  );
+}
+
+/* ==== SALIDA SIMPLE (sin formulario de ventas) ==== */
+function SalidaSimple({ tt, loading, onMarcar, tipo, rec, updateRec, sala, comm, pid }) {
+  return (
+    <>
+      <div className="sec-title" style={{marginTop:16}}>Cierre Turno {tipo}</div>
+
+      {/* Aviso comisiones */}
+      <div style={{background:"#F0FDF4",border:"1px solid #BBF7D0",borderRadius:14,padding:"14px 16px",marginBottom:12}}>
+        <div style={{fontWeight:700,fontSize:14,color:"#15803D",marginBottom:4}}>
+          💰 Comisiones se cargan automáticamente
+        </div>
+        <div style={{fontSize:13,color:"#166534",lineHeight:1.6}}>
+          Las ventas y comisiones de este turno se calcularán con la información oficial del sistema B2B de Lider, que se actualiza los días <b>lunes</b>. No es necesario que registres las ventas manualmente.
+        </div>
+      </div>
+
+      {/* Audio solo en PM */}
+      {tipo==="PM" && (
+        <>
+          <div className="sec-title">Audio de cierre</div>
+          <AudioCierre rec={rec} updateRec={updateRec} pid={pid}/>
+        </>
+      )}
+
+      {/* Botón salida */}
+      <div className="card" style={{marginTop:12}}>
+        <button className="btn btn-coral btn-block" disabled={loading} onClick={onMarcar}>
+          {loading ? <RefreshCw size={18} className="spin"/> : <LogOut size={18}/>}
+          {loading ? "Obteniendo ubicación…" : `Marcar salida ${tipo}`}
         </button>
       </div>
     </>
