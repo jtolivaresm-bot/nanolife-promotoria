@@ -543,7 +543,7 @@ export default function App() {
 
         {/* SCREENS */}
         <div className="nl-screen">
-          {tab==="inicio"   && <Inicio   rec={rec} comm={comm} steps={steps} doneCount={doneCount} pct={pct} fecha={fecha} sala={sala} setTab={setTab} setTurno={setTurno} pid={pid} db={db} configVersion={configVersion}/>}
+          {tab==="inicio"   && <Inicio   rec={rec} comm={comm} steps={steps} doneCount={doneCount} pct={pct} fecha={fecha} sala={sala} setTab={setTab} setTurno={setTurno} pid={pid} db={db} configVersion={configVersion} marcacionesSheet={marcacionesState} ventasB2BSheet={ventasB2BState}/>}
           {tab==="marcar"   && <Marcar   rec={rec} updateRec={updateRec} sala={sala} cfg={db.config} turno={turno} comm={comm} pid={pid}/>}
           {tab==="capacita" && <Capacitacion training={db.training}/>}
         </div>
@@ -563,7 +563,7 @@ export default function App() {
   );
 }
 
-function Inicio({ rec, comm, steps, doneCount, pct, fecha, sala, setTab, setTurno, pid, db, configVersion }) {
+function Inicio({ rec, comm, steps, doneCount, pct, fecha, sala, setTab, setTurno, pid, db, configVersion, marcacionesSheet, ventasB2BSheet }) {
   const fechaTxt = new Date(fecha+"T12:00").toLocaleDateString("es-CL",{weekday:"long",day:"numeric",month:"long"});
   const go = (k) => { setTurno(k); setTab("marcar"); };
   const stock = sala ? (STOCK_SALAS[sala.id] || {}) : {};
@@ -798,7 +798,7 @@ function Inicio({ rec, comm, steps, doneCount, pct, fecha, sala, setTab, setTurn
       </>} {/* fin guard sala */}
 
       {/* HISTORIAL — siempre visible */}
-      <ResumenCampana pid={pid} db={db} configVersion={configVersion} marcacionesSheet={marcacionesState} ventasB2B={ventasB2BState}/>
+      <ResumenCampana pid={pid} db={db} configVersion={configVersion} marcacionesSheet={marcacionesSheet} ventasB2B={ventasB2BSheet}/>
 
       {/* Capacitación siempre visible cuando no hay jornada */}
       {!sala && (
