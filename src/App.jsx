@@ -387,7 +387,7 @@ export default function App() {
   const [tab, setTab] = useState("inicio");
   const [turno, setTurno] = useState(turnoActual());
   const [coordOpen, setCoordOpen] = useState(false);
-  const [promotoresState, setPromotoresState] = useState([...PROMOTORES]);
+  const [promotoresState, setPromotoresState] = useState([]);
   const fecha = todayISO();
 
   useEffect(()=>{
@@ -487,7 +487,8 @@ export default function App() {
           promotores={promotoresState}
           salas={SALAS}
           onLogin={id=>{setPid(id); localStorage.setItem("nanolife_pid",id);}}
-          configVersion={configVersion}/>
+          configVersion={configVersion}
+          loading={promotoresState.length===0}/>
       </div>
     </div>
   );
@@ -1596,7 +1597,7 @@ function Capacitacion({ training }) {
 
 /* ============================ LOGIN SCREEN ============================ */
 
-function LoginScreen({ promotores, salas, onLogin, configVersion }) {
+function LoginScreen({ promotores, salas, onLogin, configVersion, loading }) {
   const [step, setStep] = useState("nombre"); // "nombre" | "rut"
   const [selId, setSelId] = useState(null);
   const [rut, setRut] = useState("");
@@ -1636,8 +1637,11 @@ function LoginScreen({ promotores, salas, onLogin, configVersion }) {
           <>
             <div style={{fontFamily:"'Segoe UI',system-ui",fontWeight:700,fontSize:22,color:"var(--ink)",marginBottom:6}}>¡Hola! 👋</div>
             <div className="muted" style={{fontSize:14,marginBottom:20}}>Selecciona tu nombre para continuar.</div>
-            {promotores.length === 0 && (
-              <div className="empty">Cargando promotores… <br/><span style={{fontSize:12}}>Si esto demora, verifica la conexión.</span></div>
+            {loading && (
+              <div style={{textAlign:"center",padding:"32px 0",color:"var(--muted)"}}>
+                <RefreshCw size={28} className="spin" style={{color:"var(--teal)",marginBottom:12}}/>
+                <div style={{fontSize:14}}>Cargando promotores…</div>
+              </div>
             )}
             {[...promotores.filter(p=>p.id!=="udemo" && !p._esDemo), PROMOTOR_DEMO].map((p,idx,arr)=>{
               const sl = salas.find(s=>s.id===getSalaIdParaHoy(p));
