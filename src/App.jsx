@@ -403,7 +403,7 @@ export default function App() {
     // Load config from Google in background
     fetch("/.netlify/functions/config-reader")
       .then(r=>r.ok ? r.json() : Promise.reject(r.status))
-      .then(({promotores, salas, stock, training, ventasB2B})=>{
+      .then(({promotores, salas, stock, training, ventasB2B, marcaciones})=>{
         if(promotores?.length) {
           PROMOTORES.splice(0, PROMOTORES.length, ...promotores);
           if (!PROMOTORES.find(p=>p.id==="udemo")) PROMOTORES.push(PROMOTOR_DEMO);
