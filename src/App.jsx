@@ -8,7 +8,8 @@ import {
 
 const STORAGE_KEY = "nanolife_v5";
 
-// Stock por sala — número plano de unidades totales disponibles
+// Ventas B2B cargadas desde el Sheet — se actualizan junto con el config
+let VENTAS_B2B = [];
 // Se sobreescribe desde Google Sheets al cargar
 let STOCK_SALAS = {
   s01: { p1:12, p2:8,  p3:15, p4:6,  p5:4  },
@@ -60,6 +61,19 @@ const PROMOTOR_DEMO = {
   salaId_04jul:"sdemo", salaId_05jul:"sdemo",
 };
 // Proxy que siempre resuelve salaId a sdemo para cualquier fecha
+// Versión de getSalaIdParaHoy que acepta una fecha específica (YYYY-MM-DD)
+function getSalaIdParaHoy_fecha(promotor, fecha) {
+  if (!promotor) return null;
+  if (promotor._esDemo) return "sdemo";
+  if (!fecha) return getSalaIdParaHoy(promotor);
+  const d = new Date(fecha+"T12:00");
+  const dia = String(d.getDate()).padStart(2,"0");
+  const meses = ["jan","feb","mar","apr","may","jun","jul","aug","sep","oct","nov","dec"];
+  const mes = meses[d.getMonth()];
+  const key = `salaId_${dia}${mes}`;
+  return promotor[key] || promotor.salaId || null;
+}
+
 function getSalaIdParaHoy(promotor) {
   if (!promotor) return null;
   if (promotor._esDemo) return "sdemo";
@@ -374,10 +388,9 @@ export default function App() {
     // Load config from Google in background
     fetch("/.netlify/functions/config-reader")
       .then(r=>r.ok ? r.json() : Promise.reject(r.status))
-      .then(({promotores, salas, stock, training})=>{
+      .then(({promotores, salas, stock, training, ventasB2B})=>{
         if(promotores?.length) {
           PROMOTORES.splice(0, PROMOTORES.length, ...promotores);
-          // El promotor DEMO siempre está al final, nunca se sobreescribe
           if (!PROMOTORES.find(p=>p.id==="udemo")) PROMOTORES.push(PROMOTOR_DEMO);
         }
         if(salas?.length)      SALAS.splice(0, SALAS.length, ...salas);
@@ -385,7 +398,9 @@ export default function App() {
           Object.keys(STOCK_SALAS).forEach(k=>delete STOCK_SALAS[k]);
           Object.assign(STOCK_SALAS, stock);
         }
-        // Update training from Drive if available
+        if(ventasB2B?.length) {
+          VENTAS_B2B.splice(0, VENTAS_B2B.length, ...ventasB2B);
+        }
         if(training?.length) {
           setDb(prev=>({ ...prev, training }));
         }
@@ -779,36 +794,62 @@ function Inicio({ rec, comm, steps, doneCount, pct, fecha, sala, setTab, setTurn
 const PAGO_JORNADA = 22000; // CLP fijo por jornada activada (AM+PM ambos completos)
 
 function ResumenCampana({ pid, db }) {
-  const mesActual = todayISO().slice(0, 7); // "YYYY-MM"
+  const mesActual = todayISO().slice(0, 7);
+
+  // Comisiones por producto (para calcular desde B2B)
+  const COMISION_MAP = {
+    "LIMPIA PISO LAVANDA": 200,
+    "LIMPIA PISO SUMMER":  200,
+    "DETERG  PODSX10 UN":  250,
+    "CAPSULAS PODS HIPO":  250,
+    "DETERG PODS X25 UN":  400,
+  };
 
   const registros = Object.entries(db.records||{})
     .filter(([k]) => k.startsWith(pid+"__") && k.split("__")[1]?.startsWith(mesActual))
     .map(([k, r]) => {
       const fecha = k.split("__")[1];
       const rec = normalizeRec(r, pid, fecha);
-      const comm = calcDia(rec);
       const amOk = !!rec.turnos.am.entrada && !!rec.turnos.am.salida;
       const pmOk = !!rec.turnos.pm.entrada && !!rec.turnos.pm.salida;
       const jornadaCompleta = amOk && pmOk;
       const pagoJornada = jornadaCompleta ? PAGO_JORNADA : 0;
-      return { fecha, comm, amOk, pmOk, jornadaCompleta, pagoJornada };
+
+      // Buscar ventas B2B para esta fecha y sala del promotor
+      const promotorObj = pid==="udemo" ? PROMOTOR_DEMO : PROMOTORES.find(p=>p.id===pid);
+      const salaIdFecha = getSalaIdParaHoy_fecha(promotorObj, fecha);
+      const salaObj = SALAS.find(s=>s.id===salaIdFecha);
+      const salaCode = salaObj?.codigo ? String(parseInt(salaObj.codigo)) : null;
+
+      // Filtrar ventas B2B por fecha y código de sala
+      const ventasDia = VENTAS_B2B.filter(v =>
+        v.fecha === fecha &&
+        salaCode &&
+        v.storeNbr === salaCode
+      );
+
+      const comisionB2B = ventasDia.reduce((s, v) => {
+        const com = COMISION_MAP[v.itemDesc] || 0;
+        return s + (v.posQty * com);
+      }, 0);
+      const unidadesB2B = ventasDia.reduce((s, v) => s + v.posQty, 0);
+      const hayB2B = ventasDia.length > 0;
+
+      return { fecha, amOk, pmOk, jornadaCompleta, pagoJornada, comisionB2B, unidadesB2B, hayB2B, ventasDia };
     })
-    .filter(r => r.amOk || r.pmOk || r.comm.unidades > 0)
+    .filter(r => r.amOk || r.pmOk)
     .sort((a,b) => b.fecha.localeCompare(a.fecha));
 
   if (!registros.length) return null;
 
-  const totalComision = registros.reduce((s,r)=>s+r.comm.total, 0);
   const totalJornadas = registros.reduce((s,r)=>s+r.pagoJornada, 0);
-  const totalUnidades = registros.reduce((s,r)=>s+r.comm.unidades, 0);
-  const gran_total = totalComision + totalJornadas;
+  const totalComisionB2B = registros.reduce((s,r)=>s+r.comisionB2B, 0);
+  const totalUnidadesB2B = registros.reduce((s,r)=>s+r.unidadesB2B, 0);
+  const gran_total = totalJornadas + totalComisionB2B;
   const jornadasCompletas = registros.filter(r=>r.jornadaCompleta).length;
+  const hayDatosB2B = registros.some(r=>r.hayB2B);
 
-  const fmtFecha = f => {
-    const d = new Date(f+"T12:00");
-    return d.toLocaleDateString("es-CL",{weekday:"short",day:"numeric",month:"short"});
-  };
-
+  const fmtFecha = f => new Date(f+"T12:00").toLocaleDateString("es-CL",{weekday:"short",day:"numeric",month:"short"});
   const mesNombre = new Date(mesActual+"-15").toLocaleDateString("es-CL",{month:"long",year:"numeric"});
 
   return (
@@ -817,7 +858,7 @@ function ResumenCampana({ pid, db }) {
         Mi resumen · <span style={{textTransform:"capitalize"}}>{mesNombre}</span>
       </div>
 
-      {/* Totales acumulados */}
+      {/* Totales */}
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginTop:10}}>
         <div style={{background:"var(--surface)",border:"1px solid var(--line)",borderRadius:16,padding:"14px 12px"}}>
           <div className="eyebrow" style={{marginBottom:6}}>Jornadas</div>
@@ -825,45 +866,79 @@ function ResumenCampana({ pid, db }) {
           <div className="muted" style={{fontSize:11.5,marginTop:2}}>{fmtCLP(totalJornadas)} acum.</div>
         </div>
         <div style={{background:"var(--surface)",border:"1px solid var(--line)",borderRadius:16,padding:"14px 12px"}}>
-          <div className="eyebrow" style={{marginBottom:6}}>Unidades</div>
-          <div className="amount" style={{fontSize:22,color:"var(--teal)"}}>{totalUnidades}</div>
-          <div className="muted" style={{fontSize:11.5,marginTop:2}}>{fmtCLP(totalComision)} acum.</div>
+          <div className="eyebrow" style={{marginBottom:6}}>Unidades B2B</div>
+          <div className="amount" style={{fontSize:22,color:"var(--teal)"}}>{totalUnidadesB2B}</div>
+          <div className="muted" style={{fontSize:11.5,marginTop:2}}>{fmtCLP(totalComisionB2B)} acum.</div>
         </div>
       </div>
 
       {/* Total acumulado */}
       <div style={{background:"linear-gradient(135deg,var(--teal-d),#063b40)",borderRadius:16,padding:"16px",marginTop:10,color:"#fff"}}>
-        <div style={{fontSize:11,fontWeight:700,opacity:.8,letterSpacing:".08em",textTransform:"uppercase",marginBottom:4}}>Total estimado del mes</div>
-        <div style={{fontFamily:"'Segoe UI',system-ui",fontWeight:700,fontSize:30,letterSpacing:"-.02em"}}>{fmtCLP(gran_total)}</div>
-        <div style={{fontSize:11,marginTop:4,opacity:.75}}>Jornadas {fmtCLP(totalJornadas)} + Comisiones {fmtCLP(totalComision)}</div>
-        <div style={{marginTop:10,background:"rgba(255,255,255,.1)",borderRadius:8,padding:"8px 10px",fontSize:11,lineHeight:1.5,opacity:.9}}>
-          ⚠️ Montos aproximados. Las comisiones reales se confirman por el sistema B2B de Lider.
+        <div style={{fontSize:11,fontWeight:700,opacity:.8,letterSpacing:".08em",textTransform:"uppercase",marginBottom:4}}>
+          Total estimado del mes
         </div>
+        <div style={{fontFamily:"'Segoe UI',system-ui",fontWeight:700,fontSize:30,letterSpacing:"-.02em"}}>
+          {fmtCLP(gran_total)}
+        </div>
+        <div style={{fontSize:11,marginTop:4,opacity:.75}}>
+          Jornadas {fmtCLP(totalJornadas)} + Comisiones B2B {fmtCLP(totalComisionB2B)}
+        </div>
+        {!hayDatosB2B && (
+          <div style={{marginTop:10,background:"rgba(255,255,255,.1)",borderRadius:8,padding:"8px 10px",fontSize:11,lineHeight:1.5,opacity:.9}}>
+            📊 Las comisiones se actualizan los lunes con la venta oficial del sistema B2B de Lider.
+          </div>
+        )}
+        {hayDatosB2B && (
+          <div style={{marginTop:10,background:"rgba(255,255,255,.1)",borderRadius:8,padding:"8px 10px",fontSize:11,lineHeight:1.5,opacity:.9}}>
+            ⚠️ Montos basados en venta oficial B2B de Lider. Sujeto a ajustes administrativos.
+          </div>
+        )}
       </div>
 
       {/* Detalle por día */}
       <div className="card" style={{padding:0,overflow:"hidden",marginTop:10}}>
         <div style={{padding:"10px 14px",borderBottom:"1px solid var(--line)",display:"flex",justifyContent:"space-between"}}>
           <span style={{fontSize:12,fontWeight:600,color:"var(--muted)"}}>Detalle por jornada</span>
-          <span style={{fontSize:11,color:"var(--muted)"}}>Jornada + Comisión</span>
+          <span style={{fontSize:11,color:"var(--muted)"}}>Jornada + Comisión B2B</span>
         </div>
         {registros.map((r,i) => (
-          <div key={r.fecha} style={{display:"flex",alignItems:"center",padding:"11px 14px",borderBottom:i<registros.length-1?"1px solid var(--line)":undefined,gap:12}}>
-            <div style={{flex:1}}>
-              <div style={{fontWeight:600,fontSize:13.5,textTransform:"capitalize"}}>{fmtFecha(r.fecha)}</div>
-              <div style={{display:"flex",gap:6,marginTop:3}}>
-                <span className={`chip ${r.amOk?"chip-ok":"chip-off"}`} style={{fontSize:10,padding:"2px 7px"}}>AM {r.amOk?"✓":"—"}</span>
-                <span className={`chip ${r.pmOk?"chip-ok":"chip-off"}`} style={{fontSize:10,padding:"2px 7px"}}>PM {r.pmOk?"✓":"—"}</span>
-                {r.jornadaCompleta
-                  ? <span className="chip chip-ok" style={{fontSize:10,padding:"2px 7px"}}>Jornada ✓</span>
-                  : <span className="chip chip-warn" style={{fontSize:10,padding:"2px 7px"}}>Incompleta</span>
-                }
+          <div key={r.fecha} style={{padding:"11px 14px",borderBottom:i<registros.length-1?"1px solid var(--line)":undefined}}>
+            <div style={{display:"flex",alignItems:"center",gap:12}}>
+              <div style={{flex:1}}>
+                <div style={{fontWeight:600,fontSize:13.5,textTransform:"capitalize"}}>{fmtFecha(r.fecha)}</div>
+                <div style={{display:"flex",gap:6,marginTop:3}}>
+                  <span className={`chip ${r.amOk?"chip-ok":"chip-off"}`} style={{fontSize:10,padding:"2px 7px"}}>AM {r.amOk?"✓":"—"}</span>
+                  <span className={`chip ${r.pmOk?"chip-ok":"chip-off"}`} style={{fontSize:10,padding:"2px 7px"}}>PM {r.pmOk?"✓":"—"}</span>
+                  {r.jornadaCompleta
+                    ? <span className="chip chip-ok" style={{fontSize:10,padding:"2px 7px"}}>Jornada ✓</span>
+                    : <span className="chip chip-warn" style={{fontSize:10,padding:"2px 7px"}}>Incompleta</span>}
+                </div>
+              </div>
+              <div style={{textAlign:"right"}}>
+                <div className="amount" style={{fontSize:14,color:r.jornadaCompleta?"var(--teal)":"var(--muted)"}}>
+                  {fmtCLP(r.pagoJornada + r.comisionB2B)}
+                </div>
+                <div className="muted" style={{fontSize:10.5,marginTop:1}}>
+                  {fmtCLP(r.pagoJornada)} + {fmtCLP(r.comisionB2B)}
+                </div>
               </div>
             </div>
-            <div style={{textAlign:"right"}}>
-              <div className="amount" style={{fontSize:14,color:r.jornadaCompleta?"var(--teal)":"var(--muted)"}}>{fmtCLP(r.pagoJornada + r.comm.total)}</div>
-              <div className="muted" style={{fontSize:10.5,marginTop:1}}>{fmtCLP(r.pagoJornada)} + {fmtCLP(r.comm.total)}</div>
-            </div>
+            {/* Detalle ventas B2B del día */}
+            {r.hayB2B && r.ventasDia.length > 0 && (
+              <div style={{marginTop:8,padding:"8px 10px",background:"var(--bg)",borderRadius:10}}>
+                {r.ventasDia.map((v,j)=>(
+                  <div key={j} style={{display:"flex",justifyContent:"space-between",fontSize:11,color:"var(--muted)",marginBottom:2}}>
+                    <span>{v.itemDesc?.replace("LIMPIA PISO","LP").replace("DETERG ","Det.").replace("CAPSULAS PODS","Cáps.")}</span>
+                    <span><b style={{color:"var(--ink)"}}>{v.posQty}u</b> · {fmtCLP(v.posQty*(COMISION_MAP[v.itemDesc]||0))}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+            {!r.hayB2B && r.jornadaCompleta && (
+              <div style={{marginTop:6,fontSize:11,color:"var(--muted)"}}>
+                📊 Comisión pendiente — se carga el lunes
+              </div>
+            )}
           </div>
         ))}
       </div>

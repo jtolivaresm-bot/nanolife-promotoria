@@ -54,7 +54,7 @@ function toObjects(rows) {
 async function driveList(token, folderId) {
   const q = encodeURIComponent(`'${folderId}' in parents and trashed=false`);
   const r = await fetch(
-    `https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id,name,mimeType,webViewLink)&orderBy=name`,
+    `https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id,name,mimeType,webViewLink)&orderBy=name&supportsAllDrives=true&includeItemsFromAllDrives=true`,
     { headers:{ Authorization:`Bearer ${token}` } }
   );
   if (!r.ok) return [];
@@ -108,13 +108,15 @@ export const handler = async (event) => {
       "https://www.googleapis.com/auth/drive.readonly"
     );
     const sheetId = process.env.GOOGLE_CONFIG_SHEET_ID;
+    const salesSheetId = process.env.GOOGLE_SHEET_ID;
     const folderId = process.env.GOOGLE_CAPACITACION_FOLDER;
 
-    const [promRows, salaRows, stockRows, training] = await Promise.all([
+    const [promRows, salaRows, stockRows, training, b2bRows] = await Promise.all([
       sheetValues(tokenSheet, sheetId, "Promotores!A:Z"),
       sheetValues(tokenSheet, sheetId, "Salas!A:Z"),
       sheetValues(tokenSheet, sheetId, "Stock!A:Z"),
       folderId ? buildTraining(tokenDrive, folderId) : Promise.resolve([]),
+      salesSheetId ? sheetValues(tokenSheet, salesSheetId, "VentasB2B!A:O").catch(()=>[]) : Promise.resolve([]),
     ]);
 
     const promotores = toObjects(promRows).map(p=>{
@@ -154,7 +156,18 @@ export const handler = async (event) => {
       stock[sid][pid] = u;
     });
 
-    return { statusCode:200, headers, body:JSON.stringify({ promotores, salas, stock, training }) };
+    // Parsear ventas B2B
+    const ventasB2B = toObjects(b2bRows).map(r=>({
+      fecha:     r["Fecha"]||"",
+      storeNbr:  String(parseInt(r["Store Nbr"]||0)),
+      storeName: r["Store Name"]||"",
+      city:      r["City"]||"",
+      itemDesc:  r["Item Desc 1"]||"",
+      posQty:    parseFloat(r["POS Qty"]||0),
+      posSales:  parseFloat((r["POS Sales"]||"0").replace(/[$,]/g,"")),
+    })).filter(r=>r.fecha && r.posQty > 0);
+
+    return { statusCode:200, headers, body:JSON.stringify({ promotores, salas, stock, training, ventasB2B }) };
   } catch(err) {
     console.error("config-reader error:", err);
     return { statusCode:500, headers, body:JSON.stringify({ error:err.message }) };
