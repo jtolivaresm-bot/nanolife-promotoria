@@ -388,6 +388,8 @@ export default function App() {
   const [turno, setTurno] = useState(turnoActual());
   const [coordOpen, setCoordOpen] = useState(false);
   const [promotoresState, setPromotoresState] = useState([]);
+  const [marcacionesState, setMarcacionesState] = useState([]);
+  const [ventasB2BState, setVentasB2BState] = useState([]);
   const fecha = todayISO();
 
   useEffect(()=>{
@@ -415,9 +417,11 @@ export default function App() {
         }
         if(ventasB2B?.length) {
           VENTAS_B2B.splice(0, VENTAS_B2B.length, ...ventasB2B);
+          setVentasB2BState([...ventasB2B]);
         }
         if(marcaciones?.length) {
           MARCACIONES_SHEET.splice(0, MARCACIONES_SHEET.length, ...marcaciones);
+          setMarcacionesState([...marcaciones]);
         }
         if(training?.length) {
           setDb(prev=>({ ...prev, training }));
@@ -794,7 +798,7 @@ function Inicio({ rec, comm, steps, doneCount, pct, fecha, sala, setTab, setTurn
       </>} {/* fin guard sala */}
 
       {/* HISTORIAL — siempre visible */}
-      <ResumenCampana pid={pid} db={db} configVersion={configVersion}/>
+      <ResumenCampana pid={pid} db={db} configVersion={configVersion} marcacionesSheet={marcacionesState} ventasB2B={ventasB2BState}/>
 
       {/* Capacitación siempre visible cuando no hay jornada */}
       {!sala && (
@@ -814,7 +818,7 @@ function Inicio({ rec, comm, steps, doneCount, pct, fecha, sala, setTab, setTurn
 
 const PAGO_JORNADA = 22000; // CLP fijo por jornada activada (AM+PM ambos completos)
 
-function ResumenCampana({ pid, db, configVersion }) {
+function ResumenCampana({ pid, db, configVersion, marcacionesSheet, ventasB2B: ventasB2BProp }) {
   const mesActual = todayISO().slice(0, 7);
 
   const COMISION_MAP = {
@@ -829,9 +833,10 @@ function ResumenCampana({ pid, db, configVersion }) {
   const nombrePromotor = promotorObj?.nombre || "";
 
   const fechasSheet = useMemo(()=>{
-    if (!MARCACIONES_SHEET.length || !nombrePromotor) return {};
+    const src = marcacionesSheet?.length ? marcacionesSheet : MARCACIONES_SHEET;
+    if (!src.length || !nombrePromotor) return {};
     const grupos = {};
-    MARCACIONES_SHEET
+    src
       .filter(m => m.promotor === nombrePromotor && m.fecha?.startsWith(mesActual))
       .forEach(m => {
         if (!grupos[m.fecha]) grupos[m.fecha] = {amE:false,amS:false,pmE:false,pmS:false};
@@ -841,7 +846,7 @@ function ResumenCampana({ pid, db, configVersion }) {
         if (m.turno==="PM" && m.tipo==="Salida")  grupos[m.fecha].pmS = true;
       });
     return grupos;
-  }, [nombrePromotor, mesActual, configVersion]);
+  }, [nombrePromotor, mesActual, configVersion, marcacionesSheet]);
 
   const fechasLocal = useMemo(()=>{
     const grupos = {};
@@ -867,7 +872,8 @@ function ResumenCampana({ pid, db, configVersion }) {
       const pagoJornada = jornadaCompleta ? PAGO_JORNADA : 0;
       const salaIdFecha = getSalaIdParaHoy_fecha(promotorObj, fecha);
       const b2bStoreNbr = B2B_STORE_NBR[salaIdFecha]||null;
-      const ventasDia = VENTAS_B2B.filter(v=>v.fecha===fecha&&b2bStoreNbr&&v.storeNbr===b2bStoreNbr);
+      const b2bSrc = ventasB2BProp?.length ? ventasB2BProp : VENTAS_B2B;
+      const ventasDia = b2bSrc.filter(v=>v.fecha===fecha&&b2bStoreNbr&&v.storeNbr===b2bStoreNbr);
       const comisionB2B = ventasDia.reduce((s,v)=>s+(v.posQty*(COMISION_MAP[v.itemDesc]||0)),0);
       const unidadesB2B = ventasDia.reduce((s,v)=>s+v.posQty,0);
       return {...m, fecha, jornadaCompleta, pagoJornada, ventasDia, comisionB2B, unidadesB2B, hayB2B:ventasDia.length>0};
