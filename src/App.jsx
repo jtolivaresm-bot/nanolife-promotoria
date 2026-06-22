@@ -825,16 +825,17 @@ function ResumenCampana({ pid, db, configVersion, marcacionesSheet, ventasB2B: v
     "LIMPIA PISO LAVANDA": 200,
     "LIMPIA PISO SUMMER":  200,
     "DETERG  PODSX10 UN":  250,
+    "DETERG PODSX10 UN":   250,  // variante con un espacio
     "CAPSULAS PODS HIPO":  250,
     "DETERG PODS X25 UN":  400,
   };
+  const getComision = (itemDesc) => COMISION_MAP[itemDesc] || COMISION_MAP[itemDesc?.replace(/  /g," ")] || 0;
 
   const promotorObj = pid==="udemo" ? PROMOTOR_DEMO : PROMOTORES.find(p=>p.id===pid);
   const nombrePromotor = promotorObj?.nombre || "";
 
   const fechasSheet = useMemo(()=>{
     const src = marcacionesSheet?.length ? marcacionesSheet : MARCACIONES_SHEET;
-    console.log('ResumenCampana - src length:', src.length, 'nombrePromotor:', nombrePromotor, 'mesActual:', mesActual);
     if (!src.length || !nombrePromotor) return {};
     const grupos = {};
     src
@@ -875,7 +876,7 @@ function ResumenCampana({ pid, db, configVersion, marcacionesSheet, ventasB2B: v
       const b2bStoreNbr = B2B_STORE_NBR[salaIdFecha]||null;
       const b2bSrc = ventasB2BProp?.length ? ventasB2BProp : VENTAS_B2B;
       const ventasDia = b2bSrc.filter(v=>v.fecha===fecha&&b2bStoreNbr&&v.storeNbr===b2bStoreNbr);
-      const comisionB2B = ventasDia.reduce((s,v)=>s+(v.posQty*(COMISION_MAP[v.itemDesc]||0)),0);
+      const comisionB2B = ventasDia.reduce((s,v)=>s+(v.posQty*getComision(v.itemDesc)),0);
       const unidadesB2B = ventasDia.reduce((s,v)=>s+v.posQty,0);
       return {...m, fecha, jornadaCompleta, pagoJornada, ventasDia, comisionB2B, unidadesB2B, hayB2B:ventasDia.length>0};
     })
@@ -944,7 +945,7 @@ function ResumenCampana({ pid, db, configVersion, marcacionesSheet, ventasB2B: v
                 {r.ventasDia.map((v,j)=>(
                   <div key={j} style={{display:"flex",justifyContent:"space-between",fontSize:11,color:"var(--muted)",marginBottom:2}}>
                     <span>{v.itemDesc?.replace("LIMPIA PISO ","LP ").replace("DETERG  ","Det.").replace("CAPSULAS PODS","Cáps.")}</span>
-                    <span><b style={{color:"var(--ink)"}}>{v.posQty}u</b> · {fmtCLP(v.posQty*(COMISION_MAP[v.itemDesc]||0))}</span>
+                    <span><b style={{color:"var(--ink)"}}>{v.posQty}u</b> · {fmtCLP(v.posQty*getComision(v.itemDesc))}</span>
                   </div>
                 ))}
               </div>
