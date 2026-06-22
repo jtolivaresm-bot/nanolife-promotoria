@@ -600,10 +600,22 @@ function Inicio({ rec, comm, steps, doneCount, pct, fecha, sala, setTab, setTurn
       const salaJornada = SALAS.find(s=>s.id===v);
       const esHoy = fechaJornada === fecha;
       const esPasado = fechaJornada < fecha;
+
+      // Revisar localStorage
       const recJornada = db.records?.[`${pid}__${fechaJornada}`];
       const recNorm = recJornada ? normalizeRec(recJornada, pid, fechaJornada) : null;
-      const amOk = !!recNorm?.turnos?.am?.entrada && !!recNorm?.turnos?.am?.salida;
-      const pmOk = !!recNorm?.turnos?.pm?.entrada && !!recNorm?.turnos?.pm?.salida;
+      let amOk = !!recNorm?.turnos?.am?.entrada && !!recNorm?.turnos?.am?.salida;
+      let pmOk = !!recNorm?.turnos?.pm?.entrada && !!recNorm?.turnos?.pm?.salida;
+
+      // Si no está en localStorage, revisar Sheet
+      if (!amOk || !pmOk) {
+        const marcFecha = (marcacionesSheet||[]).filter(m => m.promotor===promotorObj?.nombre && m.fecha===fechaJornada);
+        if (marcFecha.length) {
+          amOk = marcFecha.some(m=>m.turno==="AM"&&m.tipo==="Entrada") && marcFecha.some(m=>m.turno==="AM"&&m.tipo==="Salida");
+          pmOk = marcFecha.some(m=>m.turno==="PM"&&m.tipo==="Entrada") && marcFecha.some(m=>m.turno==="PM"&&m.tipo==="Salida");
+        }
+      }
+
       const completada = amOk && pmOk;
       return { fechaJornada, dia, mesIdx, salaJornada, esHoy, esPasado, completada, amOk, pmOk };
     })
