@@ -834,6 +834,7 @@ function ResumenCampana({ pid, db, configVersion, marcacionesSheet, ventasB2B: v
 
   const fechasSheet = useMemo(()=>{
     const src = marcacionesSheet?.length ? marcacionesSheet : MARCACIONES_SHEET;
+    console.log('ResumenCampana - src length:', src.length, 'nombrePromotor:', nombrePromotor, 'mesActual:', mesActual);
     if (!src.length || !nombrePromotor) return {};
     const grupos = {};
     src
