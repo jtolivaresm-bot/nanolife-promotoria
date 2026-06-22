@@ -8,8 +8,19 @@ import {
 
 const STORAGE_KEY = "nanolife_v5";
 
-// Ventas B2B cargadas desde el Sheet — se actualizan junto con el config
-let VENTAS_B2B = [];
+// Mapeo de salaId → Store Nbr del B2B de Lider
+// Estos son los números exactos que aparecen en el reporte Sell Out
+const B2B_STORE_NBR = {
+  s01: "655",  // Antofagasta - Caparrosa
+  s02: "89",   // Hualpén - Bio Bio
+  s03: "92",   // La Serena - Puertas del Mar
+  s05: "3",    // Ñuñoa - Irarrázaval
+  s06: "57",   // Vitacura
+  s07: "75",   // Maipú - Pajaritos
+  s08: "95",   // La Reina - Alessandri
+  s09: "97",   // Lo Barnechea - Puente Nuevo
+  s10: "120",  // Temuco - Barrio Inglés
+};
 // Se sobreescribe desde Google Sheets al cargar
 let STOCK_SALAS = {
   s01: { p1:12, p2:8,  p3:15, p4:6,  p5:4  },
@@ -818,14 +829,11 @@ function ResumenCampana({ pid, db }) {
       // Buscar ventas B2B para esta fecha y sala del promotor
       const promotorObj = pid==="udemo" ? PROMOTOR_DEMO : PROMOTORES.find(p=>p.id===pid);
       const salaIdFecha = getSalaIdParaHoy_fecha(promotorObj, fecha);
-      const salaObj = SALAS.find(s=>s.id===salaIdFecha);
-      const salaCode = salaObj?.codigo ? String(parseInt(salaObj.codigo)) : null;
+      const b2bStoreNbr = B2B_STORE_NBR[salaIdFecha] || null;
 
-      // Filtrar ventas B2B por fecha y código de sala
+      // Filtrar ventas B2B por fecha y Store Nbr
       const ventasDia = VENTAS_B2B.filter(v =>
-        v.fecha === fecha &&
-        salaCode &&
-        v.storeNbr === salaCode
+        v.fecha === fecha && b2bStoreNbr && v.storeNbr === b2bStoreNbr
       );
 
       const comisionB2B = ventasDia.reduce((s, v) => {

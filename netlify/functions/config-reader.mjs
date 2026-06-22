@@ -157,15 +157,23 @@ export const handler = async (event) => {
     });
 
     // Parsear ventas B2B
-    const ventasB2B = toObjects(b2bRows).map(r=>({
-      fecha:     r["Fecha"]||"",
-      storeNbr:  String(parseInt(r["Store Nbr"]||0)),
-      storeName: r["Store Name"]||"",
-      city:      r["City"]||"",
-      itemDesc:  r["Item Desc 1"]||"",
-      posQty:    parseFloat(r["POS Qty"]||0),
-      posSales:  parseFloat((r["POS Sales"]||"0").replace(/[$,]/g,"")),
-    })).filter(r=>r.fecha && r.posQty > 0);
+    const ventasB2B = toObjects(b2bRows).map(r=>{
+      // Normalizar fecha: acepta DD-MM-YYYY, DD/MM/YYYY o YYYY-MM-DD
+      let fecha = r["Fecha"]||"";
+      if (fecha.match(/^\d{2}[-\/]\d{2}[-\/]\d{4}$/)) {
+        const [d,m,y] = fecha.split(/[-\/]/);
+        fecha = `${y}-${m}-${d}`;
+      }
+      return {
+        fecha,
+        storeNbr:  String(parseInt(r["Store Nbr"]||0)),
+        storeName: r["Store Name"]||"",
+        city:      r["City"]||"",
+        itemDesc:  r["Item Desc 1"]||"",
+        posQty:    parseFloat(r["POS Qty"]||0),
+        posSales:  parseFloat((r["POS Sales"]||"0").replace(/[$,]/g,"")),
+      };
+    }).filter(r=>r.fecha && r.posQty > 0);
 
     return { statusCode:200, headers, body:JSON.stringify({ promotores, salas, stock, training, ventasB2B }) };
   } catch(err) {
