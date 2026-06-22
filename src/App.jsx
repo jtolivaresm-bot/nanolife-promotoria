@@ -387,6 +387,7 @@ export default function App() {
   const [tab, setTab] = useState("inicio");
   const [turno, setTurno] = useState(turnoActual());
   const [coordOpen, setCoordOpen] = useState(false);
+  const [promotoresState, setPromotoresState] = useState([...PROMOTORES]);
   const fecha = todayISO();
 
   useEffect(()=>{
@@ -421,6 +422,8 @@ export default function App() {
         if(training?.length) {
           setDb(prev=>({ ...prev, training }));
         }
+        // Actualizar estado React para forzar re-render del LoginScreen
+        setPromotoresState([...PROMOTORES.filter(p=>p.id!=="udemo"), PROMOTOR_DEMO]);
         setConfigVersion(v=>v+1);
       })
       .catch(err=>console.warn("Config load failed (using defaults):", err));
@@ -481,7 +484,7 @@ export default function App() {
     <div className="nl-root"><style>{CSS}</style>
       <div className="nl-phone">
         <LoginScreen
-          promotores={[...PROMOTORES.filter(p=>p.id!=="udemo"), PROMOTOR_DEMO]}
+          promotores={promotoresState}
           salas={SALAS}
           onLogin={id=>{setPid(id); localStorage.setItem("nanolife_pid",id);}}
           configVersion={configVersion}/>
