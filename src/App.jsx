@@ -488,7 +488,7 @@ export default function App() {
           salas={SALAS}
           onLogin={id=>{setPid(id); localStorage.setItem("nanolife_pid",id);}}
           configVersion={configVersion}
-          loading={promotoresState.length===0}/>
+          configLoading={promotoresState.length===0}/>
       </div>
     </div>
   );
@@ -1597,7 +1597,7 @@ function Capacitacion({ training }) {
 
 /* ============================ LOGIN SCREEN ============================ */
 
-function LoginScreen({ promotores, salas, onLogin, configVersion, loading }) {
+function LoginScreen({ promotores, salas, onLogin, configVersion, configLoading }) {
   const [step, setStep] = useState("nombre"); // "nombre" | "rut"
   const [selId, setSelId] = useState(null);
   const [rut, setRut] = useState("");
@@ -1637,7 +1637,7 @@ function LoginScreen({ promotores, salas, onLogin, configVersion, loading }) {
           <>
             <div style={{fontFamily:"'Segoe UI',system-ui",fontWeight:700,fontSize:22,color:"var(--ink)",marginBottom:6}}>¡Hola! 👋</div>
             <div className="muted" style={{fontSize:14,marginBottom:20}}>Selecciona tu nombre para continuar.</div>
-            {loading && (
+            {configLoading && (
               <div style={{textAlign:"center",padding:"32px 0",color:"var(--muted)"}}>
                 <RefreshCw size={28} className="spin" style={{color:"var(--teal)",marginBottom:12}}/>
                 <div style={{fontSize:14}}>Cargando promotores…</div>
