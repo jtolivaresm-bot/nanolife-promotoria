@@ -111,12 +111,13 @@ export const handler = async (event) => {
     const salesSheetId = process.env.GOOGLE_SHEET_ID;
     const folderId = process.env.GOOGLE_CAPACITACION_FOLDER;
 
-    const [promRows, salaRows, stockRows, training, b2bRows] = await Promise.all([
+    const [promRows, salaRows, stockRows, training, b2bRows, marcRows] = await Promise.all([
       sheetValues(tokenSheet, sheetId, "Promotores!A:Z"),
       sheetValues(tokenSheet, sheetId, "Salas!A:Z"),
       sheetValues(tokenSheet, sheetId, "Stock!A:Z"),
       folderId ? buildTraining(tokenDrive, folderId) : Promise.resolve([]),
       salesSheetId ? sheetValues(tokenSheet, salesSheetId, "VentasB2B!A:O").catch(()=>[]) : Promise.resolve([]),
+      salesSheetId ? sheetValues(tokenSheet, salesSheetId, "Marcaciones!A:L").catch(()=>[]) : Promise.resolve([]),
     ]);
 
     const promotores = toObjects(promRows).map(p=>{
@@ -175,7 +176,18 @@ export const handler = async (event) => {
       };
     }).filter(r=>r.fecha && r.posQty > 0);
 
-    return { statusCode:200, headers, body:JSON.stringify({ promotores, salas, stock, training, ventasB2B }) };
+    // Parsear marcaciones del sheet
+    const marcaciones = toObjects(marcRows).map(r=>({
+      fecha:    r["Fecha"]||r["fecha"]||"",
+      promotor: r["Promotor"]||r["promotor"]||"",
+      sala:     r["Sala"]||r["sala"]||"",
+      ciudad:   r["Ciudad"]||r["ciudad"]||"",
+      turno:    (r["Turno"]||r["turno"]||"").toUpperCase(),
+      tipo:     r["Tipo"]||r["tipo"]||"",
+      hora:     r["Hora"]||r["hora"]||"",
+    })).filter(r=>r.fecha && r.promotor);
+
+    return { statusCode:200, headers, body:JSON.stringify({ promotores, salas, stock, training, ventasB2B, marcaciones }) };
   } catch(err) {
     console.error("config-reader error:", err);
     return { statusCode:500, headers, body:JSON.stringify({ error:err.message }) };
