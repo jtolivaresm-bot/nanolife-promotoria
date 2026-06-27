@@ -214,12 +214,12 @@ function jornadaSteps(rec, sala, prods){
   const ventasAM = Object.values(amT.cantidades||{}).reduce((s,q)=>s+(q||0),0)>0;
   const ventasPM = Object.values(pmT.cantidades||{}).reduce((s,q)=>s+(q||0),0)>0;
   return [
-    { k:"Entrada AM",         done: !!amT.entrada },
-    { k:"Fotos góndola",      done: fotosOk },
-    { k:"Salida AM + ventas", done: !!amT.salida && ventasAM },
-    { k:"Entrada PM",         done: !!pmT.entrada },
-    { k:"Salida PM + ventas", done: !!pmT.salida && ventasPM },
-    { k:"Audio de cierre",    done: !!rec.audio },
+    { k:"Entrada AM",  done: !!amT.entrada },
+    { k:"Fotos góndola", done: fotosOk },
+    { k:"Salida AM",   done: !!amT.salida },
+    { k:"Entrada PM",  done: !!pmT.entrada },
+    { k:"Salida PM",   done: !!pmT.salida },
+    { k:"Audio de cierre", done: !!rec.audio },
   ];
 }
 
@@ -985,11 +985,15 @@ function MiniStat({icon:Ic,label,val,accent}){
 
 function Marcar({ rec, updateRec, sala, cfg, turno, comm, pid }) {
   const [loading, setLoading] = useState(false);
+  const [sheetStatus, setSheetStatus] = useState(null); // {amE, amS, pmE, pmS} desde Sheet
+  const [checkingSheet, setCheckingSheet] = useState(true);
+  const [gpsPreview, setGpsPreview] = useState(null);
+  const gpsCacheRef = useRef(null);
+
   const tr = rec.turnos[turno];
   const tt = TURNOS[turno];
 
   const stock = sala ? (STOCK_SALAS[sala.id] || {}) : {};
-  // Si todo el stock está en 0 (no actualizado), mostrar todos los productos
   const stockVacio = Object.keys(stock).length === 0 || Object.values(stock).every(v => (typeof v==="number" ? v : 0) === 0);
   const prods = PRODUCTOS.filter(p => {
     if (sala?.productos && !sala.productos.includes(p.id)) return false;
@@ -999,33 +1003,55 @@ function Marcar({ rec, updateRec, sala, cfg, turno, comm, pid }) {
     return (typeof s === "number" ? s : 0) > 0;
   });
 
-  const [gpsPreview, setGpsPreview] = useState(null);
-  const gpsCacheRef = useRef(null); // GPS prefetcheado en background
+  const promotorObj = pid==="udemo" ? PROMOTOR_DEMO : PROMOTORES.find(p=>p.id===pid)||{nombre:"Promotor"};
 
-  // Prefetch GPS en background cuando aparece la pantalla de salida
-  // así cuando el promotor toca "Marcar salida" ya está listo
+  // Consultar Sheet en tiempo real al entrar a Marcar
+  async function checkSheet() {
+    setCheckingSheet(true);
+    try {
+      const nombre = encodeURIComponent(promotorObj.nombre);
+      const fecha = todayISO();
+      const r = await fetch(`/.netlify/functions/check-marcaciones?promotor=${nombre}&fecha=${fecha}`);
+      if (r.ok) {
+        const status = await r.json();
+        setSheetStatus(status);
+      }
+    } catch(e) {
+      console.warn("No se pudo verificar Sheet:", e.message);
+    }
+    setCheckingSheet(false);
+  }
+
+  useEffect(() => { checkSheet(); }, []);
+
+  // Combinar Sheet + localStorage (Sheet tiene prioridad)
+  const status = {
+    amE: sheetStatus?.amE || !!rec.turnos.am.entrada,
+    amS: sheetStatus?.amS || !!rec.turnos.am.salida,
+    pmE: sheetStatus?.pmE || !!rec.turnos.pm.entrada,
+    pmS: sheetStatus?.pmS || !!rec.turnos.pm.salida,
+  };
+
+  // Prefetch GPS cuando hay entrada sin salida
   useEffect(() => {
-    const needsGps = (tr.entrada && !tr.salida);
+    const needsGps = (status.amE && !status.amS) || (status.pmE && !status.pmS);
     if (!needsGps) return;
     let cancelled = false;
     gpsCacheRef.current = null;
-    getGPS().then(gps => {
-      if (!cancelled) gpsCacheRef.current = gps;
-    });
+    getGPS().then(gps => { if (!cancelled) gpsCacheRef.current = gps; });
     return () => { cancelled = true; };
-  }, [!!tr.entrada, !!tr.salida]);
+  }, [status.amE, status.amS, status.pmE, status.pmS]);
 
-  async function iniciarMarcacion(tipo) {
+  async function iniciarMarcacion(tipoMarcacion, turnoMarcacion) {
     setLoading(true);
-    // Usar GPS prefetcheado si está disponible, sino esperar
     const gps = gpsCacheRef.current || await getGPS();
     gpsCacheRef.current = null;
     setLoading(false);
-    setGpsPreview({ ...(gps || { lat:null, lng:null, acc:null }), tipo });
+    setGpsPreview({ ...(gps || { lat:null, lng:null, acc:null }), tipo: tipoMarcacion, turnoMarcacion });
   }
 
   async function confirmarMarcacion() {
-    const { lat, lng, acc, tipo } = gpsPreview;
+    const { lat, lng, acc, tipo, turnoMarcacion } = gpsPreview;
     setGpsPreview(null);
     setLoading(true);
 
@@ -1033,18 +1059,15 @@ function Marcar({ rec, updateRec, sala, cfg, turno, comm, pid }) {
     if (lat) { stamp.lat=lat; stamp.lng=lng; stamp.acc=acc; }
 
     // Capturar fotos ANTES de updateRec
-    const fotosActuales = tipo==="entrada" && turno==="am"
+    const fotosActuales = tipo==="entrada" && turnoMarcacion==="am"
       ? { ...rec.turnos.am.fotosProducto }
       : {};
-    const cantidadesActuales = {}; // ya no se usan ventas manuales
 
     // Guardar localmente
-    updateRec(r=>({...r, turnos:{...r.turnos,[turno]:{...r.turnos[turno],[tipo]:stamp}}}));
-
-    const promotorObj = pid==="udemo" ? PROMOTOR_DEMO : PROMOTORES.find(p=>p.id===pid)||{nombre:"Promotor"};
+    updateRec(r=>({...r, turnos:{...r.turnos,[turnoMarcacion]:{...r.turnos[turnoMarcacion],[tipo]:stamp}}}));
 
     try {
-      // 1. Marcación → Sheets
+      // Marcación → Sheets
       const marcRes = await fetch("/.netlify/functions/sheets-append", {
         method:"POST", headers:{"Content-Type":"application/json"},
         body: JSON.stringify({ sheet:"Marcaciones", row:{
@@ -1052,7 +1075,7 @@ function Marcar({ rec, updateRec, sala, cfg, turno, comm, pid }) {
           promotor: promotorObj.nombre,
           sala: sala.nombre,
           ciudad: sala.ciudad,
-          turno: turno.toUpperCase(),
+          turno: turnoMarcacion.toUpperCase(),
           tipo: tipo==="entrada"?"Entrada":"Salida",
           hora: hhmm(stamp.ts),
           lat: stamp.lat!=null ? stamp.lat.toFixed(6) : "",
@@ -1062,58 +1085,143 @@ function Marcar({ rec, updateRec, sala, cfg, turno, comm, pid }) {
           enLocal: "",
         }})
       });
-      if(!marcRes.ok) console.error("Sheets marcacion error:", await marcRes.text());
+      if(!marcRes.ok) console.error("Sheets error:", await marcRes.text());
 
       // Fotos → Drive al marcar ENTRADA AM
-      if (tipo==="entrada" && turno==="am") {
+      if (tipo==="entrada" && turnoMarcacion==="am") {
         const fotoEntries = Object.entries(fotosActuales).filter(([,v])=>v);
-        console.log(`↑ Subiendo ${fotoEntries.length} fotos de góndola...`);
         for (const [prodId, dataUrl] of fotoEntries) {
           const prod = PRODUCTOS.find(p=>p.id===prodId);
           const fileName = `${todayISO()}_${promotorObj.nombre.replace(/ /g,"_")}_${sala.codigo||sala.id}_${(prod?.nombre||prodId).replace(/ /g,"_")}.jpg`;
           uploadToDriveDirect(dataUrl, fileName, "1SSaJ_YJIhiVouHUzxfU1n273tK_aR7D7");
-          console.log(`↑ Enviando foto: ${fileName}`);
         }
       }
+
+      // Actualizar estado del Sheet tras confirmar
+      setSheetStatus(prev => ({
+        ...prev,
+        amE: prev?.amE || (turnoMarcacion==="am" && tipo==="entrada"),
+        amS: prev?.amS || (turnoMarcacion==="am" && tipo==="salida"),
+        pmE: prev?.pmE || (turnoMarcacion==="pm" && tipo==="entrada"),
+        pmS: prev?.pmS || (turnoMarcacion==="pm" && tipo==="salida"),
+      }));
 
     } catch(e) { console.error("Sync error:", e); }
 
     setLoading(false);
   }
 
-  // Pantalla de confirmación con mapa
+  // Pantalla de confirmación GPS
   if (gpsPreview) return (
     <GpsConfirm
       gps={gpsPreview}
       sala={sala}
-      turno={turno}
+      turno={gpsPreview.turnoMarcacion}
       onConfirmar={confirmarMarcacion}
       onCancelar={()=>setGpsPreview(null)}
     />
   );
 
-  const fotosOk = prods.every(p=>tr.fotosProducto?.[p.id]);
+  // ENTRADA AM: fotos primero
+  const fotosOk = prods.every(p=>rec.turnos.am.fotosProducto?.[p.id]);
+  if (turno==="am" && !status.amE) return (
+    <>
+      <EntradaAM loading={loading} onMarcar={()=>iniciarMarcacion("entrada","am")}
+        sala={sala} tr={rec.turnos.am} prods={prods} updateRec={updateRec}
+        checkingSheet={checkingSheet}/>
+    </>
+  );
 
-  // ENTRADA AM: primero fotos, luego marcar entrada
-  if (turno==="am" && !tr.entrada) return (
-    <EntradaAM loading={loading} onMarcar={()=>iniciarMarcacion("entrada")}
-      sala={sala} tr={tr} prods={prods} updateRec={updateRec}/>
+  // Vista principal: botones por separado
+  return (
+    <div style={{marginTop:8}}>
+      {checkingSheet && (
+        <div style={{display:"flex",alignItems:"center",gap:8,padding:"8px 0",color:"var(--muted)",fontSize:13}}>
+          <RefreshCw size={14} className="spin"/> Verificando marcaciones…
+        </div>
+      )}
+
+      {/* TURNO AM */}
+      <div className="sec-title">Turno AM · 11:00 – 15:00</div>
+      <div className="card tight" style={{marginBottom:12}}>
+        <BotonesEntradaSalida
+          labelEntrada="Marcar Entrada AM"
+          labelSalida="Marcar Salida AM"
+          tieneEntrada={status.amE}
+          tieneSalida={status.amS}
+          loading={loading}
+          onEntrada={()=>iniciarMarcacion("entrada","am")}
+          onSalida={()=>iniciarMarcacion("salida","am")}
+        />
+      </div>
+
+      {/* TURNO PM */}
+      <div className="sec-title">Turno PM · 16:00 – 20:00</div>
+      <div className="card tight" style={{marginBottom:12}}>
+        <BotonesEntradaSalida
+          labelEntrada="Marcar Entrada PM"
+          labelSalida="Marcar Salida PM"
+          tieneEntrada={status.pmE}
+          tieneSalida={status.pmS}
+          loading={loading}
+          onEntrada={()=>iniciarMarcacion("entrada","pm")}
+          onSalida={()=>iniciarMarcacion("salida","pm")}
+        />
+      </div>
+
+      {/* Audio PM — solo si tiene entrada PM */}
+      {status.pmE && !status.pmS && (
+        <>
+          <div className="sec-title">Audio de cierre</div>
+          <AudioCierre rec={rec} updateRec={updateRec} pid={pid}/>
+        </>
+      )}
+    </div>
   );
-  // ENTRADA PM: solo botón
-  if (turno==="pm" && !tr.entrada) return (
-    <MarcarEntrada loading={loading} onMarcar={()=>iniciarMarcacion("entrada")} sala={sala} tipo="PM"/>
+}
+
+function BotonesEntradaSalida({ labelEntrada, labelSalida, tieneEntrada, tieneSalida, loading, onEntrada, onSalida }) {
+  return (
+    <div style={{display:"flex",flexDirection:"column",gap:10,padding:"4px 0"}}>
+      {/* Entrada */}
+      <div style={{display:"flex",alignItems:"center",gap:12}}>
+        <div style={{flex:1}}>
+          {tieneEntrada ? (
+            <div style={{display:"flex",alignItems:"center",gap:8,color:"#16A34A",fontSize:14,fontWeight:600}}>
+              <CheckCircle2 size={18} color="#16A34A"/> {labelEntrada.replace("Marcar ","")} registrada ✓
+            </div>
+          ) : (
+            <button className="btn btn-primary btn-block" disabled={loading} onClick={onEntrada}
+              style={{padding:"13px"}}>
+              {loading ? <RefreshCw size={16} className="spin"/> : <LogIn size={16}/>}
+              {labelEntrada}
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Salida */}
+      <div style={{display:"flex",alignItems:"center",gap:12}}>
+        <div style={{flex:1}}>
+          {tieneSalida ? (
+            <div style={{display:"flex",alignItems:"center",gap:8,color:"#64748B",fontSize:14,fontWeight:600}}>
+              <CheckCircle2 size={18} color="#64748B"/> {labelSalida.replace("Marcar ","")} registrada ✓
+            </div>
+          ) : !tieneEntrada ? (
+            <div style={{display:"flex",alignItems:"center",gap:8,padding:"12px",background:"#F8FAFC",borderRadius:12,color:"var(--muted)",fontSize:13}}>
+              <AlertCircle size={15}/> Primero debes registrar la entrada
+            </div>
+          ) : (
+            <button className="btn btn-coral btn-block" disabled={loading} onClick={onSalida}
+              style={{padding:"13px"}}>
+              {loading ? <RefreshCw size={16} className="spin"/> : <LogOut size={16}/>}
+              {labelSalida}
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
   );
-  // SALIDA AM: solo marcación, sin ventas
-  if (turno==="am" && tr.entrada && !tr.salida) return (
-    <SalidaSimple tt={tt} loading={loading} onMarcar={()=>iniciarMarcacion("salida")} tipo="AM"
-      rec={rec} updateRec={updateRec} sala={sala} comm={comm} pid={pid}/>
-  );
-  // SALIDA PM: audio + marcar salida, sin ventas
-  if (turno==="pm" && tr.entrada && !tr.salida) return (
-    <SalidaSimple tt={tt} loading={loading} onMarcar={()=>iniciarMarcacion("salida")} tipo="PM"
-      rec={rec} updateRec={updateRec} sala={sala} comm={comm} pid={pid}/>
-  );
-  return <TurnoCerrado tr={tr} tt={tt} comm={comm} turno={turno} sala={sala} prods={prods}/>;
 }
 
 function EntradaAM({ loading, onMarcar, sala, tr, prods, updateRec }) {
