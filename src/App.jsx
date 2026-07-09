@@ -156,19 +156,103 @@ function compressImage(file){
 
 // Sube archivos a Drive via Google Apps Script (evita CORS y problemas de cuota)
 const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyigkOEq7Y1JyFmUg-gqxIQt6Io95l2hEJQsvjv_fWU5X-J8QwE9Z1UVGx7XjQ7is0/exec";
+const UPLOAD_QUEUE_KEY = "nanolife_upload_queue";
+const UPLOAD_MAX_INTENTOS = 5;
 
-async function uploadToDriveDirect(dataUrl, fileName, folderId, mimeType) {
+function loadUploadQueue(){ try{const r=localStorage.getItem(UPLOAD_QUEUE_KEY); return r?JSON.parse(r):[];}catch{return [];} }
+function saveUploadQueue(q){ try{localStorage.setItem(UPLOAD_QUEUE_KEY, JSON.stringify(q));}catch{} }
+
+// mode:"no-cors" no deja leer la respuesta de Apps Script, así que un fetch que no
+// lanza excepción no confirma que el archivo llegó — solo que la red funcionó.
+// Por eso encolamos cada subida en localStorage y reintentamos hasta UPLOAD_MAX_INTENTOS
+// veces (en distintas sesiones/conexión si hace falta), en vez de perderla silenciosamente
+// ante un error de red puntual.
+function queueUpload(dataUrl, fileName, folderId, mimeType) {
   const tipo = (mimeType||"").includes("audio") ? "audio" : "foto";
-  // mode: no-cors evita bloqueo CORS — fire and forget
-  fetch(APPS_SCRIPT_URL, {
-    method: "POST",
-    mode: "no-cors",
-    headers: { "Content-Type": "text/plain;charset=utf-8" },
-    body: JSON.stringify({ dataUrl, fileName, folderId, tipo }),
-  });
-  // Retornamos inmediatamente sin esperar respuesta (no-cors no permite leerla)
-  console.log(`↑ Enviando ${tipo}: ${fileName}`);
-  return { fileId: null, webViewLink: null };
+  const item = { id: `${Date.now()}_${Math.random().toString(36).slice(2)}`, dataUrl, fileName, folderId, tipo, intentos: 0 };
+  const q = loadUploadQueue();
+  q.push(item);
+  saveUploadQueue(q);
+  procesarColaUploads();
+}
+
+const SHEET_QUEUE_KEY = "nanolife_sheet_queue";
+function loadSheetQueue(){ try{const r=localStorage.getItem(SHEET_QUEUE_KEY); return r?JSON.parse(r):[];}catch{return [];} }
+function saveSheetQueue(q){ try{localStorage.setItem(SHEET_QUEUE_KEY, JSON.stringify(q));}catch{} }
+
+// Igual que queueUpload: encola la fila para Sheets y reintenta, en vez de perder
+// silenciosamente la marcación/cierre si el fetch falla o el servidor responde error.
+function queueSheetAppend(sheet, row) {
+  const item = { id: `${Date.now()}_${Math.random().toString(36).slice(2)}`, sheet, row, intentos: 0 };
+  const q = loadSheetQueue();
+  q.push(item);
+  saveSheetQueue(q);
+  procesarColaSheets();
+}
+
+let procesandoColaSheets = false;
+async function procesarColaSheets() {
+  if (procesandoColaSheets) return;
+  procesandoColaSheets = true;
+  try {
+    for (const item of loadSheetQueue()) {
+      try {
+        const res = await fetch("/.netlify/functions/sheets-append", {
+          method:"POST", headers:{"Content-Type":"application/json"},
+          body: JSON.stringify({ sheet: item.sheet, row: item.row }),
+        });
+        if (!res.ok) throw new Error(await res.text());
+        saveSheetQueue(loadSheetQueue().filter(x=>x.id!==item.id));
+      } catch (err) {
+        console.warn(`Reintento de guardado fallido (${item.sheet}):`, err.message);
+        const q = loadSheetQueue();
+        const idx = q.findIndex(x=>x.id===item.id);
+        if (idx>=0) {
+          q[idx].intentos++;
+          if (q[idx].intentos >= UPLOAD_MAX_INTENTOS) {
+            console.error(`Guardado abandonado tras ${UPLOAD_MAX_INTENTOS} intentos (${item.sheet}):`, item.row);
+            q.splice(idx,1);
+          }
+          saveSheetQueue(q);
+        }
+      }
+    }
+  } finally {
+    procesandoColaSheets = false;
+  }
+}
+
+let procesandoCola = false;
+async function procesarColaUploads() {
+  if (procesandoCola) return;
+  procesandoCola = true;
+  try {
+    for (const item of loadUploadQueue()) {
+      try {
+        await fetch(APPS_SCRIPT_URL, {
+          method: "POST",
+          mode: "no-cors",
+          headers: { "Content-Type": "text/plain;charset=utf-8" },
+          body: JSON.stringify({ dataUrl: item.dataUrl, fileName: item.fileName, folderId: item.folderId, tipo: item.tipo }),
+        });
+        saveUploadQueue(loadUploadQueue().filter(x=>x.id!==item.id));
+      } catch (err) {
+        console.warn(`Reintento de subida fallido para ${item.fileName}:`, err.message);
+        const q = loadUploadQueue();
+        const idx = q.findIndex(x=>x.id===item.id);
+        if (idx>=0) {
+          q[idx].intentos++;
+          if (q[idx].intentos >= UPLOAD_MAX_INTENTOS) {
+            console.error(`Subida abandonada tras ${UPLOAD_MAX_INTENTOS} intentos: ${item.fileName}`);
+            q.splice(idx,1);
+          }
+          saveUploadQueue(q);
+        }
+      }
+    }
+  } finally {
+    procesandoCola = false;
+  }
 }
 
 function loadDB(){try{const r=localStorage.getItem(STORAGE_KEY);return r?JSON.parse(r):null;}catch{return null;}}
@@ -390,7 +474,21 @@ export default function App() {
   const [promotoresState, setPromotoresState] = useState([]);
   const [marcacionesState, setMarcacionesState] = useState([]);
   const [ventasB2BState, setVentasB2BState] = useState([]);
+  const [uploadsPendientes, setUploadsPendientes] = useState(0);
   const fecha = todayISO();
+
+  useEffect(()=>{
+    // Reintenta fotos/audios y marcaciones/cierres que hayan quedado pendientes (ej. sin señal en la sala)
+    const tick = () => {
+      procesarColaUploads();
+      procesarColaSheets();
+      setUploadsPendientes(loadUploadQueue().length + loadSheetQueue().length);
+    };
+    tick();
+    const iv = setInterval(tick, 60000);
+    window.addEventListener("online", tick);
+    return () => { clearInterval(iv); window.removeEventListener("online", tick); };
+  },[]);
 
   useEffect(()=>{
     // Restore session
@@ -520,6 +618,11 @@ export default function App() {
               <NanoLogo height={30}/>
               <div><div className="nm">Promotoría</div><div className="sub">Campaña Lider 2026</div></div>
             </div>
+            {uploadsPendientes>0 && (
+              <div title={`${uploadsPendientes} elemento(s) pendientes de sincronizar (fotos, audios o marcaciones)`} style={{fontSize:11,color:"#B45309",background:"#FEF3C7",borderRadius:8,padding:"3px 8px",fontWeight:600}}>
+                ↑ {uploadsPendientes}
+              </div>
+            )}
             <button className="iconbtn" onClick={()=>setCoordOpen(true)}><ShieldCheck size={18}/></button>
           </div>
           <button className="who" onClick={handleLogout} title="Toca para cerrar sesión">
@@ -1067,25 +1170,21 @@ function Marcar({ rec, updateRec, sala, cfg, turno, comm, pid }) {
     updateRec(r=>({...r, turnos:{...r.turnos,[turnoMarcacion]:{...r.turnos[turnoMarcacion],[tipo]:stamp}}}));
 
     try {
-      // Marcación → Sheets
-      const marcRes = await fetch("/.netlify/functions/sheets-append", {
-        method:"POST", headers:{"Content-Type":"application/json"},
-        body: JSON.stringify({ sheet:"Marcaciones", row:{
-          fecha: todayISO(),
-          promotor: promotorObj.nombre,
-          sala: sala.nombre,
-          ciudad: sala.ciudad,
-          turno: turnoMarcacion.toUpperCase(),
-          tipo: tipo==="entrada"?"Entrada":"Salida",
-          hora: hhmm(stamp.ts),
-          lat: stamp.lat!=null ? stamp.lat.toFixed(6) : "",
-          lng: stamp.lng!=null ? stamp.lng.toFixed(6) : "",
-          acc: stamp.acc??"",
-          dist: "",
-          enLocal: "",
-        }})
+      // Marcación → Sheets (encolada: se reintenta sola si falla la red o el servidor)
+      queueSheetAppend("Marcaciones", {
+        fecha: todayISO(),
+        promotor: promotorObj.nombre,
+        sala: sala.nombre,
+        ciudad: sala.ciudad,
+        turno: turnoMarcacion.toUpperCase(),
+        tipo: tipo==="entrada"?"Entrada":"Salida",
+        hora: hhmm(stamp.ts),
+        lat: stamp.lat!=null ? stamp.lat.toFixed(6) : "",
+        lng: stamp.lng!=null ? stamp.lng.toFixed(6) : "",
+        acc: stamp.acc??"",
+        dist: "",
+        enLocal: "",
       });
-      if(!marcRes.ok) console.error("Sheets error:", await marcRes.text());
 
       // Fotos → Drive al marcar ENTRADA AM
       if (tipo==="entrada" && turnoMarcacion==="am") {
@@ -1093,7 +1192,7 @@ function Marcar({ rec, updateRec, sala, cfg, turno, comm, pid }) {
         for (const [prodId, dataUrl] of fotoEntries) {
           const prod = PRODUCTOS.find(p=>p.id===prodId);
           const fileName = `${todayISO()}_${promotorObj.nombre.replace(/ /g,"_")}_${sala.codigo||sala.id}_${(prod?.nombre||prodId).replace(/ /g,"_")}.jpg`;
-          uploadToDriveDirect(dataUrl, fileName, "1SSaJ_YJIhiVouHUzxfU1n273tK_aR7D7");
+          queueUpload(dataUrl, fileName, "1SSaJ_YJIhiVouHUzxfU1n273tK_aR7D7");
         }
       }
 
@@ -1593,19 +1692,16 @@ function AudioCierre({ rec, updateRec, pid }) {
             const prom = pid==="udemo" ? PROMOTOR_DEMO : PROMOTORES.find(p=>p.id===r.promotorId)||{nombre:"Promotor"};
             const salaObj=SALAS.find(s=>s.id===getSalaIdParaHoy(prom));
             const fileName=`${r.fecha}_${prom.nombre.replace(/ /g,"_")}_cierre.webm`;
-            // Subir audio (fire and forget — no-cors no permite leer respuesta)
-            uploadToDriveDirect(dataUrl, fileName, "1H_VkKpCwXnZISX-OAvhZnFF42uGRxwt2", "audio/webm");
-            // Registrar cierre en Sheets inmediatamente
+            // Subir audio — se encola y reintenta si la red falla (no-cors no permite leer respuesta)
+            queueUpload(dataUrl, fileName, "1H_VkKpCwXnZISX-OAvhZnFF42uGRxwt2", "audio/webm");
+            // Registrar cierre en Sheets (encolado: se reintenta sola si falla la red o el servidor)
             const comm=calcDia(r);
-            fetch("/.netlify/functions/sheets-append",{
-              method:"POST",headers:{"Content-Type":"application/json"},
-              body:JSON.stringify({sheet:"Cierres",row:{
-                fecha:r.fecha, promotor:prom.nombre,
-                sala:salaObj?.nombre||"", ciudad:salaObj?.ciudad||"",
-                comisionAM:comm.am.base, comisionPM:comm.pm.base,
-                comisionTotalDia:comm.total, audioUrl:""
-              }})
-            }).catch(()=>{});
+            queueSheetAppend("Cierres", {
+              fecha:r.fecha, promotor:prom.nombre,
+              sala:salaObj?.nombre||"", ciudad:salaObj?.ciudad||"",
+              comisionAM:comm.am.base, comisionPM:comm.pm.base,
+              comisionTotalDia:comm.total, audioUrl:""
+            });
             return{...r,audio:{dur:secs,ts:Date.now()}};
           });
         };
