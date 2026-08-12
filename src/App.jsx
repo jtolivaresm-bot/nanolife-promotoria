@@ -75,6 +75,13 @@ const PROMOTOR_DEMO = {
   salaId_04jul:"sdemo", salaId_05jul:"sdemo",
 };
 // Proxy que siempre resuelve salaId a sdemo para cualquier fecha
+// Las columnas salaId_DDmes de la hoja Promotores se han cargado con la abreviación del
+// mes en español ("ago") Y en inglés ("aug") según quién las escribió — se generan y
+// aceptan ambas para no perder el cronograma de un promotor por un desajuste de idioma.
+const MESES_ES = ["ene","feb","mar","abr","may","jun","jul","ago","sep","oct","nov","dic"];
+const MESES_EN = ["jan","feb","mar","apr","may","jun","jul","aug","sep","oct","nov","dec"];
+const MESES_IDX = { ene:0,jan:0, feb:1, mar:2, abr:3,apr:3, may:4, jun:5, jul:6, ago:7,aug:7, sep:8, oct:9, nov:10, dic:11,dec:11 };
+
 // Versión de getSalaIdParaHoy que acepta una fecha específica (YYYY-MM-DD)
 function getSalaIdParaHoy_fecha(promotor, fecha) {
   if (!promotor) return null;
@@ -82,10 +89,9 @@ function getSalaIdParaHoy_fecha(promotor, fecha) {
   if (!fecha) return getSalaIdParaHoy(promotor);
   const d = new Date(fecha+"T12:00");
   const dia = String(d.getDate()).padStart(2,"0");
-  const meses = ["jan","feb","mar","apr","may","jun","jul","aug","sep","oct","nov","dec"];
-  const mes = meses[d.getMonth()];
-  const key = `salaId_${dia}${mes}`;
-  return promotor[key] || promotor.salaId || null;
+  return promotor[`salaId_${dia}${MESES_ES[d.getMonth()]}`]
+    || promotor[`salaId_${dia}${MESES_EN[d.getMonth()]}`]
+    || promotor.salaId || null;
 }
 
 function getSalaIdParaHoy(promotor) {
@@ -93,10 +99,10 @@ function getSalaIdParaHoy(promotor) {
   if (promotor._esDemo) return "sdemo";
   const d = new Date();
   const dia = String(d.getDate()).padStart(2,"0");
-  const meses = ["jan","feb","mar","apr","may","jun","jul","aug","sep","oct","nov","dec"];
-  const mes = meses[d.getMonth()];
-  const key = `salaId_${dia}${mes}`;
-  if (promotor[key]) return promotor[key];
+  const keyEs = `salaId_${dia}${MESES_ES[d.getMonth()]}`;
+  const keyEn = `salaId_${dia}${MESES_EN[d.getMonth()]}`;
+  if (promotor[keyEs]) return promotor[keyEs];
+  if (promotor[keyEn]) return promotor[keyEn];
   if (promotor.salaId) return promotor.salaId;
   return null;
 }
@@ -683,7 +689,6 @@ function Inicio({ rec, comm, steps, doneCount, pct, fecha, sala, setTab, setTurn
 
   // Calcular jornadas comprometidas del mes actual
   const promotorObj = pid==="udemo" ? PROMOTOR_DEMO : PROMOTORES.find(p=>p.id===pid);
-  const meses = ["jan","feb","mar","apr","may","jun","jul","aug","sep","oct","nov","dec"];
   const hoy = new Date();
   const mesActualNum = hoy.getMonth(); // 0-11
   const anioActual = hoy.getFullYear();
@@ -691,12 +696,12 @@ function Inicio({ rec, comm, steps, doneCount, pct, fecha, sala, setTab, setTurn
   const jornadasComprometidas = promotorObj ? Object.entries(promotorObj)
     .filter(([k,v]) => k.startsWith("salaId_") && v)
     .map(([k,v]) => {
-      // key: salaId_19jun → dia=19, mes="jun"
+      // key: salaId_19jun → dia=19, mes="jun" (o "ago"/"aug", ver MESES_IDX)
       const match = k.match(/salaId_(\d{2})([a-z]{3})/);
       if (!match) return null;
       const dia = parseInt(match[1]);
-      const mesIdx = meses.indexOf(match[2]);
-      if (mesIdx === -1) return null;
+      const mesIdx = MESES_IDX[match[2]];
+      if (mesIdx === undefined) return null;
       // Solo mostrar del mes actual
       if (mesIdx !== mesActualNum) return null;
       const fechaJornada = `${anioActual}-${String(mesIdx+1).padStart(2,"0")}-${String(dia).padStart(2,"0")}`;
