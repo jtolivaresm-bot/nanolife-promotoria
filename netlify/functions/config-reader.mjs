@@ -91,12 +91,14 @@ export const handler = async () => {
 
     // Leer config (promotores/salas/stock) y ventas en paralelo
     // Capacitación y Marcaciones son opcionales y no bloquean
-    const [promRows, salaRows, stockRows, b2bRows, marcRows, training] = await Promise.all([
+    const [promRows, salaRows, stockRows, b2bRows, marcRows, capacRows, training] = await Promise.all([
       sheetValues(tokenSheet, configSheetId, "Promotores!A:Z"),
       sheetValues(tokenSheet, configSheetId, "Salas!A:Z"),
       sheetValues(tokenSheet, configSheetId, "Stock!A:Z"),
       salesSheetId ? sheetValues(tokenSheet, salesSheetId, "VentasB2B!A:O").catch(()=>[]) : Promise.resolve([]),
       salesSheetId ? sheetValues(tokenSheet, salesSheetId, "Marcaciones!A:L").catch(()=>[]) : Promise.resolve([]),
+      // Progreso de capacitación (opcional; no bloquea si la hoja aún no existe)
+      salesSheetId ? sheetValues(tokenSheet, salesSheetId, "CapacitacionProgreso!A:G").catch(()=>[]) : Promise.resolve([]),
       folderId ? buildTraining(tokenDrive, folderId).catch(()=>[]) : Promise.resolve([]),
     ]);
 
@@ -165,10 +167,17 @@ export const handler = async () => {
       hora:     r["Hora"]||r["hora"]||"",
     })).filter(r=>r.fecha && r.promotor);
 
+    // Progreso de capacitación: una fila por (promotorId, itemId) visto
+    const capacitacion = toObjects(capacRows).map(r=>({
+      promotorId: r["PromotorId"]||r["promotorId"]||"",
+      itemId:     r["ItemId"]||r["itemId"]||"",
+      fecha:      r["Fecha"]||r["fecha"]||"",
+    })).filter(r=>r.promotorId && r.itemId);
+
     return {
       statusCode: 200,
       headers,
-      body: JSON.stringify({ promotores, salas, stock, training, ventasB2B, marcaciones }),
+      body: JSON.stringify({ promotores, salas, stock, training, ventasB2B, marcaciones, capacitacion }),
     };
 
   } catch(err) {

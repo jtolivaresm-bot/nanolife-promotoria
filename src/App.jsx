@@ -186,6 +186,12 @@ const SHEET_QUEUE_KEY = "nanolife_sheet_queue";
 function loadSheetQueue(){ try{const r=localStorage.getItem(SHEET_QUEUE_KEY); return r?JSON.parse(r):[];}catch{return [];} }
 function saveSheetQueue(q){ try{localStorage.setItem(SHEET_QUEUE_KEY, JSON.stringify(q));}catch{} }
 
+// Progreso de capacitación marcado localmente (optimista, por promotor): { [pid]: [itemId,...] }
+// Sirve para que el ✓ se vea al instante y sobreviva recargas antes de que el Sheet lo refleje.
+const CAPAC_SEEN_KEY = "nanolife_capac_seen";
+function loadCapacSeen(){ try{return JSON.parse(localStorage.getItem(CAPAC_SEEN_KEY))||{};}catch{return {};} }
+function saveCapacSeen(m){ try{localStorage.setItem(CAPAC_SEEN_KEY, JSON.stringify(m));}catch{} }
+
 // Igual que queueUpload: encola la fila para Sheets y reintenta, en vez de perder
 // silenciosamente la marcación/cierre si el fetch falla o el servidor responde error.
 function queueSheetAppend(sheet, row) {
@@ -481,6 +487,8 @@ export default function App() {
   const [marcacionesState, setMarcacionesState] = useState([]);
   const [ventasB2BState, setVentasB2BState] = useState([]);
   const [uploadsPendientes, setUploadsPendientes] = useState(0);
+  const [capacServer, setCapacServer] = useState([]);        // progreso desde el Sheet: [{promotorId,itemId}]
+  const [capacSeen, setCapacSeen] = useState(loadCapacSeen); // progreso local optimista: { pid: [itemId] }
   const fecha = todayISO();
 
   useEffect(()=>{
@@ -509,7 +517,7 @@ export default function App() {
     // Load config from Google in background
     fetch("/.netlify/functions/config-reader")
       .then(r=>r.ok ? r.json() : Promise.reject(r.status))
-      .then(({promotores, salas, stock, training, ventasB2B, marcaciones})=>{
+      .then(({promotores, salas, stock, training, ventasB2B, marcaciones, capacitacion})=>{
         if(promotores?.length) {
           PROMOTORES.splice(0, PROMOTORES.length, ...promotores);
           if (!PROMOTORES.find(p=>p.id==="udemo")) PROMOTORES.push(PROMOTOR_DEMO);
@@ -530,6 +538,7 @@ export default function App() {
         if(training?.length) {
           setDb(prev=>({ ...prev, training }));
         }
+        if(capacitacion) setCapacServer(capacitacion);
         // Actualizar estado React para forzar re-render del LoginScreen
         setPromotoresState([...PROMOTORES.filter(p=>p.id!=="udemo"), PROMOTOR_DEMO]);
         setConfigVersion(v=>v+1);
@@ -560,6 +569,36 @@ export default function App() {
   },[rid,pid,fecha]);
 
   const comm = useMemo(()=>calcDia(rec),[rec]);
+
+  // Capacitación: ids de items ya vistos por este promotor (Sheet ∪ marcados localmente)
+  const seenIds = useMemo(()=>{
+    const s = new Set(capacSeen[pid]||[]);
+    capacServer.forEach(r=>{ if(r.promotorId===pid) s.add(r.itemId); });
+    return s;
+  },[capacSeen,capacServer,pid]);
+
+  const handleMarkSeen = useCallback((item)=>{
+    if (!pid || !promotor || !item) return;
+    const yaLocal    = (capacSeen[pid]||[]).includes(item.id);
+    const yaServidor = capacServer.some(r=>r.promotorId===pid && r.itemId===item.id);
+    if (yaLocal && yaServidor) return; // nada que hacer
+    // Marca optimista local (se ve al instante y persiste entre recargas)
+    setCapacSeen(prev=>{
+      const cur = new Set(prev[pid]||[]);
+      cur.add(item.id);
+      const next = { ...prev, [pid]:[...cur] };
+      saveCapacSeen(next);
+      return next;
+    });
+    // Escribe al Sheet solo si es un promotor real y aún no está registrado (evita filas duplicadas)
+    if (pid!=="udemo" && !yaServidor && !yaLocal) {
+      queueSheetAppend("CapacitacionProgreso", {
+        fecha, promotorId:pid, promotor:promotor.nombre,
+        itemId:item.id, titulo:item.titulo||"", categoria:item.categoria||"",
+        hora:hhmm(Date.now()),
+      });
+    }
+  },[pid,promotor,capacSeen,capacServer,fecha]);
   // Calcular prods filtrados por stock (mismo filtro que Marcar e Inicio)
   const prodsApp = useMemo(()=>{
     if (!sala) return PRODUCTOS;
@@ -654,7 +693,7 @@ export default function App() {
         <div className="nl-screen">
           {tab==="inicio"   && <Inicio   rec={rec} comm={comm} steps={steps} doneCount={doneCount} pct={pct} fecha={fecha} sala={sala} setTab={setTab} setTurno={setTurno} pid={pid} db={db} configVersion={configVersion} marcacionesSheet={marcacionesState} ventasB2BSheet={ventasB2BState}/>}
           {tab==="marcar"   && <Marcar   rec={rec} updateRec={updateRec} sala={sala} cfg={db.config} turno={turno} comm={comm} pid={pid}/>}
-          {tab==="capacita" && <Capacitacion training={db.training}/>}
+          {tab==="capacita" && <Capacitacion training={db.training} seenIds={seenIds} onMarkSeen={handleMarkSeen}/>}
         </div>
 
         {/* TAB BAR */}
@@ -1756,16 +1795,17 @@ const CAT_CONFIG = {
   detergente:  { label:"Detergente en Cápsulas", color:"#7C3AED", bg:"#F5F3FF" },
 };
 
-function Capacitacion({ training }) {
-  const [unifOpen, setUnifOpen] = useState(false);
+function Capacitacion({ training, seenIds, onMarkSeen }) {
+  const [active, setActive] = useState(null); // item abierto en el reproductor
   const cats = ["marca","limpiapisos","detergente"];
   const icon = t => t==="video"?<Video size={17}/>:t==="pdf"?<FileText size={17}/>:t==="imagen"?<ImageIcon size={17}/>:<FileText size={17}/>;
   const uniforme = training.find(m=>m.tipo==="uniforme");
   const resto = training.filter(m=>m.tipo!=="uniforme");
-  function openItem(m) {
-    if (m.url) { window.open(m.url, "_blank"); return; }
-    if (m.tipo==="uniforme") setUnifOpen(true);
-  }
+
+  const total = training.length;
+  const vistos = training.filter(m=>seenIds.has(m.id)).length;
+  const pct = total ? Math.round(vistos/total*100) : 0;
+
   return (
     <>
       <div style={{display:"flex",justifyContent:"center",padding:"20px 0 4px"}}>
@@ -1774,16 +1814,31 @@ function Capacitacion({ training }) {
       <p className="muted" style={{fontSize:13,textAlign:"center",margin:"4px 12px 0"}}>
         Repasa estos contenidos antes y durante la campaña.
       </p>
+
+      {/* Avance del curso */}
+      {total > 0 && (
+        <div style={{margin:"16px 0 4px",background:"var(--surface)",border:"1px solid var(--line)",borderRadius:16,padding:"14px 16px",boxShadow:"0 1px 3px rgba(11,42,45,.06)"}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:9}}>
+            <span style={{fontWeight:700,fontSize:14,color:"var(--ink)"}}>Tu avance</span>
+            <span style={{fontSize:13,fontWeight:600,color:"var(--teal)"}}>{vistos} de {total} · {pct}%</span>
+          </div>
+          <div style={{height:8,background:"var(--line)",borderRadius:99,overflow:"hidden"}}>
+            <div style={{height:"100%",width:`${pct}%`,background:"linear-gradient(90deg,var(--teal),var(--mint))",borderRadius:99,transition:"width .4s ease"}}/>
+          </div>
+          {pct===100 && <div style={{fontSize:12.5,color:"var(--teal-d)",marginTop:9,fontWeight:600}}>🎉 ¡Completaste toda la capacitación!</div>}
+        </div>
+      )}
+
       {uniforme && (
         <>
           <div className="sec-title"><span style={{width:10,height:10,borderRadius:3,background:"#1E3A6E",display:"inline-block",flexShrink:0}}/> Presentación</div>
-          <button onClick={()=>openItem(uniforme)} style={{width:"100%",background:"#EEF2FF",border:"1px solid #1E3A6E22",borderRadius:16,padding:"14px",display:"flex",alignItems:"center",gap:12,cursor:"pointer",textAlign:"left",marginTop:10}}>
+          <button onClick={()=>setActive(uniforme)} style={{width:"100%",background:"#EEF2FF",border:"1px solid #1E3A6E22",borderRadius:16,padding:"14px",display:"flex",alignItems:"center",gap:12,cursor:"pointer",textAlign:"left",marginTop:10}}>
             <div style={{width:52,height:52,borderRadius:11,background:"#1E3A6E",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><span style={{fontSize:24}}>👔</span></div>
             <div style={{flex:1,minWidth:0}}>
               <div style={{fontWeight:700,fontSize:14,color:"#1E3A6E"}}>{uniforme.titulo}</div>
               <div className="muted" style={{fontSize:12.5,marginTop:2}}>{uniforme.desc}</div>
             </div>
-            <ChevronRight size={18} color="#1E3A6E"/>
+            {seenIds.has(uniforme.id) ? <CheckCircle2 size={20} color="#16A34A"/> : <ChevronRight size={18} color="#1E3A6E"/>}
           </button>
         </>
       )}
@@ -1794,33 +1849,79 @@ function Capacitacion({ training }) {
         return (
           <div key={cat}>
             <div className="sec-title"><span style={{width:10,height:10,borderRadius:3,background:cfg.color,display:"inline-block",flexShrink:0}}/> {cfg.label}</div>
-            {items.map(m => (
-              <button key={m.id} onClick={()=>openItem(m)}
-                style={{width:"100%",background:cfg.bg,border:`1px solid ${cfg.color}22`,borderRadius:16,padding:"14px",display:"flex",alignItems:"center",gap:12,cursor:"pointer",textAlign:"left",marginTop:10}}>
-                <div style={{width:42,height:42,borderRadius:11,background:"white",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,color:cfg.color,boxShadow:"0 1px 4px rgba(0,0,0,.08)"}}>{icon(m.tipo)}</div>
-                <div style={{flex:1,minWidth:0}}>
-                  <div style={{fontWeight:600,fontSize:13.5,color:cfg.color}}>{m.titulo}</div>
-                  <div className="muted" style={{fontSize:12,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",marginTop:2}}>{m.desc}</div>
-                </div>
-                <ChevronRight size={17} color={cfg.color}/>
-              </button>
-            ))}
+            {items.map(m => {
+              const visto = seenIds.has(m.id);
+              return (
+                <button key={m.id} onClick={()=>setActive(m)}
+                  style={{width:"100%",background:cfg.bg,border:`1px solid ${cfg.color}22`,borderRadius:16,padding:"14px",display:"flex",alignItems:"center",gap:12,cursor:"pointer",textAlign:"left",marginTop:10}}>
+                  <div style={{position:"relative",flexShrink:0}}>
+                    <div style={{width:42,height:42,borderRadius:11,background:"white",display:"flex",alignItems:"center",justifyContent:"center",color:cfg.color,boxShadow:"0 1px 4px rgba(0,0,0,.08)"}}>{icon(m.tipo)}</div>
+                    {visto && <div style={{position:"absolute",top:-5,right:-5,background:"#16A34A",borderRadius:"50%",width:18,height:18,display:"flex",alignItems:"center",justifyContent:"center",border:"2px solid "+cfg.bg}}><CheckCircle2 size={11} color="white"/></div>}
+                  </div>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{fontWeight:600,fontSize:13.5,color:cfg.color}}>{m.titulo}</div>
+                    <div className="muted" style={{fontSize:12,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",marginTop:2}}>
+                      {visto ? "✓ Visto" : (m.desc || (m.tipo==="video"?"Video":m.tipo==="pdf"?"Documento":"Material"))}
+                    </div>
+                  </div>
+                  {visto ? <CheckCircle2 size={19} color="#16A34A"/> : <ChevronRight size={17} color={cfg.color}/>}
+                </button>
+              );
+            })}
           </div>
         );
       })}
       {!training.length && <div className="empty" style={{marginTop:20}}>El coordinador aún no ha subido material de capacitación.</div>}
-      {unifOpen && !uniforme?.url && (
-        <div className="scrim" onClick={()=>setUnifOpen(false)} style={{alignItems:"center",justifyContent:"center"}}>
-          <div onClick={e=>e.stopPropagation()} style={{width:"calc(100% - 24px)",maxHeight:"90%",background:"#fff",borderRadius:22,overflow:"hidden",boxShadow:"0 20px 60px rgba(0,0,0,.3)"}}>
-            <div style={{padding:"12px 16px",display:"flex",justifyContent:"space-between",alignItems:"center",borderBottom:"1px solid var(--line)"}}>
-              <b>Uniforme y presentación</b>
-              <button style={{background:"var(--bg)",border:"none",borderRadius:9,width:34,height:34,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}} onClick={()=>setUnifOpen(false)}><X size={18}/></button>
-            </div>
-            <div style={{overflowY:"auto"}}><UniformeImg/></div>
-          </div>
-        </div>
+
+      {active && (
+        <ReproductorCapacitacion
+          m={active}
+          visto={seenIds.has(active.id)}
+          onMarkSeen={()=>onMarkSeen(active)}
+          onClose={()=>setActive(null)}
+        />
       )}
     </>
+  );
+}
+
+/* Reproductor embebido: muestra el video/PDF de Drive dentro de la app y permite marcarlo como visto. */
+function ReproductorCapacitacion({ m, visto, onMarkSeen, onClose }) {
+  // El id de los items reales de Drive ES el fileId → se puede embeber con /preview.
+  const esDrive = m.url && /^[A-Za-z0-9_-]{20,}$/.test(m.id);
+  const previewSrc = esDrive ? `https://drive.google.com/file/d/${m.id}/preview` : null;
+  const esUniforme = m.tipo==="uniforme" && !m.url;
+  return (
+    <div className="scrim" onClick={onClose} style={{alignItems:"center",justifyContent:"center"}}>
+      <div onClick={e=>e.stopPropagation()} style={{width:"calc(100% - 24px)",maxWidth:540,maxHeight:"92%",background:"#fff",borderRadius:22,overflow:"hidden",boxShadow:"0 20px 60px rgba(0,0,0,.3)",display:"flex",flexDirection:"column"}}>
+        <div style={{padding:"12px 16px",display:"flex",justifyContent:"space-between",alignItems:"center",borderBottom:"1px solid var(--line)",gap:10}}>
+          <b style={{fontSize:15,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{m.titulo}</b>
+          <button style={{background:"var(--bg)",border:"none",borderRadius:9,width:34,height:34,flexShrink:0,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}} onClick={onClose}><X size={18}/></button>
+        </div>
+        <div style={{flex:1,minHeight:240,background:esUniforme?"#fff":"#000",display:"flex",overflow:"auto"}}>
+          {previewSrc ? (
+            <iframe title={m.titulo} src={previewSrc} allow="autoplay; encrypted-media; fullscreen" allowFullScreen
+              style={{width:"100%",minHeight:280,border:"none"}}/>
+          ) : esUniforme ? (
+            <div style={{width:"100%",overflowY:"auto"}}><UniformeImg/></div>
+          ) : (
+            <div style={{color:"#fff",margin:"auto",padding:24,textAlign:"center",fontSize:13,lineHeight:1.5}}>
+              Vista previa no disponible.{m.desc?` ${m.desc}`:""}
+              {m.url && <div style={{marginTop:12}}><a href={m.url} target="_blank" rel="noreferrer" style={{color:"#5EEAD4",fontWeight:600}}>Abrir en Drive ↗</a></div>}
+            </div>
+          )}
+        </div>
+        <div style={{padding:"12px 16px",borderTop:"1px solid var(--line)"}}>
+          {m.desc && !esUniforme && <p className="muted" style={{fontSize:12.5,margin:"0 0 10px",lineHeight:1.45}}>{m.desc}</p>}
+          {previewSrc && <div style={{textAlign:"center",marginBottom:10}}><a href={m.url} target="_blank" rel="noreferrer" className="muted" style={{fontSize:12,textDecoration:"underline"}}>¿No carga? Abrir en Drive ↗</a></div>}
+          <button className="btn btn-block" disabled={visto} onClick={onMarkSeen}
+            style={{padding:"13px",display:"flex",alignItems:"center",justifyContent:"center",gap:8,fontWeight:600,border:"none",borderRadius:14,cursor:visto?"default":"pointer",
+              background:visto?"#E4F4F1":"var(--teal)",color:visto?"var(--teal-d)":"#fff"}}>
+            <CheckCircle2 size={18}/>{visto?"Ya lo viste":"Marcar como visto"}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 
