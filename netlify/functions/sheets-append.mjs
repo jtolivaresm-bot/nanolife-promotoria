@@ -38,6 +38,8 @@ const COLS = {
   Marcaciones: ["Fecha","Promotor","Sala","Ciudad","Turno","Tipo","Hora","Latitud","Longitud","Precisión (m)","Distancia al local (m)","En local"],
   Ventas:      ["Fecha","Promotor","Sala","Ciudad","Turno","Producto","Unidades","Precio unitario","Comisión unitaria","Comisión total"],
   Cierres:     ["Fecha","Promotor","Sala","Ciudad","Comisión AM","Comisión PM","Comisión Total","Audio URL"],
+  // Una fila por (promotor, item de capacitación) marcado como visto. La app dedupe antes de escribir.
+  CapacitacionProgreso: ["Fecha","PromotorId","Promotor","ItemId","Titulo","Categoria","Hora"],
 };
 const KEYS = {
   fecha:"Fecha", promotor:"Promotor", sala:"Sala", ciudad:"Ciudad",
@@ -47,6 +49,7 @@ const KEYS = {
   comisionUnit:"Comisión unitaria", comisionTotal:"Comisión total",
   comisionAM:"Comisión AM", comisionPM:"Comisión PM",
   comisionTotalDia:"Comisión Total", audioUrl:"Audio URL",
+  promotorId:"PromotorId", itemId:"ItemId", titulo:"Titulo", categoria:"Categoria",
 };
 
 function toRow(sheet, data) {
