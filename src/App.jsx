@@ -1794,13 +1794,39 @@ const CAT_CONFIG = {
   limpiapisos: { label:"Limpiapisos + Recarga",  color:"#0E6F76", bg:"#E4F4F1" },
   detergente:  { label:"Detergente en Cápsulas", color:"#7C3AED", bg:"#F5F3FF" },
 };
+// Colores para secciones dinámicas (una carpeta de Drive = una sección). Se asignan por orden.
+const CAT_COLORS = [
+  { color:"#0E6F76", bg:"#E4F4F1" },
+  { color:"#1E3A6E", bg:"#EEF2FF" },
+  { color:"#7C3AED", bg:"#F5F3FF" },
+  { color:"#B45309", bg:"#FEF3E2" },
+  { color:"#BE185D", bg:"#FCE7F3" },
+  { color:"#047857", bg:"#ECFDF5" },
+  { color:"#B91C1C", bg:"#FEF2F2" },
+  { color:"#4338CA", bg:"#EEF2FF" },
+];
 
 function Capacitacion({ training, seenIds, onMarkSeen }) {
   const [active, setActive] = useState(null); // item abierto en el reproductor
-  const cats = ["marca","limpiapisos","detergente"];
   const icon = t => t==="video"?<Video size={17}/>:t==="pdf"?<FileText size={17}/>:t==="imagen"?<ImageIcon size={17}/>:<FileText size={17}/>;
   const uniforme = training.find(m=>m.tipo==="uniforme");
   const resto = training.filter(m=>m.tipo!=="uniforme");
+
+  // Secciones dinámicas: cada categoría (subcarpeta de Drive) es una sección, en su orden.
+  const secciones = useMemo(()=>{
+    const map = new Map();
+    resto.forEach(m=>{
+      const key = m.categoria || "seccion";
+      if(!map.has(key)) map.set(key, {
+        key,
+        label: m.categoriaLabel || CAT_CONFIG[key]?.label || key,
+        orden: m.orden ?? 999,
+        items: [],
+      });
+      map.get(key).items.push(m);
+    });
+    return [...map.values()].sort((a,b)=> (a.orden-b.orden) || a.label.localeCompare(b.label));
+  },[resto]);
 
   const total = training.length;
   const vistos = training.filter(m=>seenIds.has(m.id)).length;
@@ -1842,14 +1868,12 @@ function Capacitacion({ training, seenIds, onMarkSeen }) {
           </button>
         </>
       )}
-      {cats.map(cat => {
-        const cfg = CAT_CONFIG[cat];
-        const items = resto.filter(m=>m.categoria===cat);
-        if(!items.length) return null;
+      {secciones.map((sec, idx) => {
+        const cfg = CAT_CONFIG[sec.key] || CAT_COLORS[idx % CAT_COLORS.length];
         return (
-          <div key={cat}>
-            <div className="sec-title"><span style={{width:10,height:10,borderRadius:3,background:cfg.color,display:"inline-block",flexShrink:0}}/> {cfg.label}</div>
-            {items.map(m => {
+          <div key={sec.key}>
+            <div className="sec-title"><span style={{width:10,height:10,borderRadius:3,background:cfg.color,display:"inline-block",flexShrink:0}}/> {sec.label}</div>
+            {sec.items.map(m => {
               const visto = seenIds.has(m.id);
               return (
                 <button key={m.id} onClick={()=>setActive(m)}

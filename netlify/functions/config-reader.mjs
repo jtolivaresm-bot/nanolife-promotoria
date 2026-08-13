@@ -57,19 +57,30 @@ async function buildTraining(token, folderId) {
     if (!r.ok) return [];
     return (await r.json()).files || [];
   }
-  const cats = { "marca":"Marca Nanolife","limpiapisos":"Limpiapisos + Recarga","detergente":"Detergente Cápsulas" };
+  // Cada subcarpeta es una sección. El nombre de la carpeta es el título de la sección.
+  // Prefijo numérico opcional ("01 Presentación") solo controla el orden; se quita del título.
+  const cleanLabel = name => name.replace(/^\s*\d+\s*[-._)]?\s+/, "").trim() || name.trim();
+  const slug = s => s.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g,"")
+    .replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"") || "seccion";
+
   const subfolders = await driveList(folderId);
+  // Solo carpetas, en el orden que devuelve Drive (orderBy=name → los prefijos numéricos ordenan bien)
+  const folders = subfolders.filter(sf => sf.mimeType === "application/vnd.google-apps.folder");
   const result = [];
-  for (const sf of subfolders) {
-    if (sf.mimeType !== "application/vnd.google-apps.folder") continue;
-    const catKey = Object.keys(cats).find(k => sf.name.toLowerCase().includes(k)) || "marca";
+  let orden = 0;
+  for (const sf of folders) {
+    const label = cleanLabel(sf.name);
+    const categoria = slug(label);
     const files = await driveList(sf.id);
     for (const f of files) {
       if (f.mimeType === "application/vnd.google-apps.folder") continue;
       const ext = f.name.split(".").pop()?.toLowerCase();
-      const tipo = ["mp4","mov","avi"].includes(ext) ? "video" : ["jpg","jpeg","png","gif","webp"].includes(ext) ? "imagen" : "documento";
-      result.push({ id:f.id, tipo, categoria:catKey, titulo:f.name.replace(/\.[^.]+$/,""), desc:"", dur:"—", url:f.webViewLink });
+      const tipo = ["mp4","mov","avi","webm","m4v"].includes(ext) ? "video"
+        : ["jpg","jpeg","png","gif","webp"].includes(ext) ? "imagen"
+        : "documento";
+      result.push({ id:f.id, tipo, categoria, categoriaLabel:label, orden, titulo:f.name.replace(/\.[^.]+$/,""), desc:"", dur:"—", url:f.webViewLink });
     }
+    orden++;
   }
   return result;
 }
