@@ -3,7 +3,7 @@ import {
   Home, MapPin, GraduationCap, Clock, LogIn, LogOut,
   CheckCircle2, Circle, Camera, Mic, Square, Trash2, X,
   AlertCircle, Store, FileText, Video, Image as ImageIcon,
-  ChevronRight, RefreshCw, Crown, ShieldCheck, Phone
+  ChevronRight, RefreshCw, Crown, ShieldCheck, Phone, Maximize2
 } from "lucide-react";
 
 const STORAGE_KEY = "nanolife_v5";
@@ -1914,18 +1914,59 @@ function ReproductorCapacitacion({ m, visto, onMarkSeen, onClose }) {
   // El id de los items reales de Drive ES el fileId → se puede embeber con /preview.
   const esDrive = m.url && /^[A-Za-z0-9_-]{20,}$/.test(m.id);
   const previewSrc = esDrive ? `https://drive.google.com/file/d/${m.id}/preview` : null;
+  // Thumbnail público de Drive: sirve de póster (evita el arranque en negro) y para leer el
+  // aspecto real del video (muchos son verticales 9:16 → si no se respeta, salen barras negras).
+  const thumbUrl = esDrive ? `https://drive.google.com/thumbnail?id=${m.id}&sz=w1000` : null;
   const esUniforme = m.tipo==="uniforme" && !m.url;
+  const [ratio, setRatio] = useState(null); // ancho/alto del video
+  const mediaRef = useRef(null);
+
+  useEffect(()=>{
+    if(!thumbUrl){ setRatio(null); return; }
+    let vivo = true;
+    const img = new Image();
+    img.onload = ()=>{ if(vivo && img.naturalWidth && img.naturalHeight) setRatio(img.naturalWidth/img.naturalHeight); };
+    img.src = thumbUrl;
+    return ()=>{ vivo=false; };
+  },[thumbUrl]);
+
+  const pantallaCompleta = ()=>{
+    const el = mediaRef.current;
+    if(!el) return;
+    const fn = el.requestFullscreen || el.webkitRequestFullscreen || el.msRequestFullscreen;
+    if(fn) { try { fn.call(el); } catch {} }
+    else if (m.url) window.open(m.url, "_blank"); // iOS no permite fullscreen de iframe → fallback
+  };
+
+  const vertical = ratio && ratio < 1;
+  // El contenedor del video toma el aspecto real: vertical llena el alto, horizontal el ancho.
+  const mediaBox = vertical
+    ? { height:"58vh", aspectRatio: ratio }
+    : { width:"100%", aspectRatio: ratio || 16/9 };
+
   return (
     <div className="scrim" onClick={onClose} style={{alignItems:"center",justifyContent:"center"}}>
       <div onClick={e=>e.stopPropagation()} style={{width:"calc(100% - 24px)",maxWidth:540,maxHeight:"92%",background:"#fff",borderRadius:22,overflow:"hidden",boxShadow:"0 20px 60px rgba(0,0,0,.3)",display:"flex",flexDirection:"column"}}>
         <div style={{padding:"12px 16px",display:"flex",justifyContent:"space-between",alignItems:"center",borderBottom:"1px solid var(--line)",gap:10}}>
           <b style={{fontSize:15,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{m.titulo}</b>
-          <button style={{background:"var(--bg)",border:"none",borderRadius:9,width:34,height:34,flexShrink:0,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}} onClick={onClose}><X size={18}/></button>
+          <div style={{display:"flex",gap:8,flexShrink:0}}>
+            {previewSrc && (
+              <button title="Pantalla completa" aria-label="Pantalla completa" onClick={pantallaCompleta}
+                style={{background:"var(--bg)",border:"none",borderRadius:9,width:34,height:34,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}>
+                <Maximize2 size={16}/>
+              </button>
+            )}
+            <button aria-label="Cerrar" onClick={onClose}
+              style={{background:"var(--bg)",border:"none",borderRadius:9,width:34,height:34,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}><X size={18}/></button>
+          </div>
         </div>
-        <div style={{flex:1,minHeight:240,background:esUniforme?"#fff":"#000",display:"flex",overflow:"auto"}}>
+        <div style={{background:esUniforme?"#fff":"#000",display:"flex",alignItems:"center",justifyContent:"center",overflow:"auto",maxHeight:"62vh"}}>
           {previewSrc ? (
-            <iframe title={m.titulo} src={previewSrc} allow="autoplay; encrypted-media; fullscreen" allowFullScreen
-              style={{width:"100%",minHeight:280,border:"none"}}/>
+            <div ref={mediaRef} style={{...mediaBox,maxWidth:"100%",maxHeight:"62vh",flexShrink:0,
+              background: thumbUrl ? `#000 url("${thumbUrl}") center/contain no-repeat` : "#000"}}>
+              <iframe title={m.titulo} src={previewSrc} allow="autoplay; encrypted-media; fullscreen" allowFullScreen
+                style={{width:"100%",height:"100%",border:"none",display:"block"}}/>
+            </div>
           ) : esUniforme ? (
             <div style={{width:"100%",overflowY:"auto"}}><UniformeImg/></div>
           ) : (
