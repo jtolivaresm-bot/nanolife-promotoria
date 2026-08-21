@@ -4,6 +4,10 @@
  * Cache: 5 minutos
  */
 
+// Dosis estándar asumida de detergente líquido por lavado. Se usa para expresar líquidos
+// y cápsulas en una misma unidad (costo por lavado) y poder rankearlos juntos.
+const ML_POR_LAVADO = 100;
+
 async function getToken(key, scope) {
   const k = JSON.parse(key);
   if (k.private_key?.includes('\\n')) k.private_key = k.private_key.replace(/\\n/g, '\n');
@@ -212,6 +216,14 @@ export const handler = async () => {
         // como "Fórmula 3 en 1".
         const mUn = prod.match(/(\d+)\s*(c[áa]psulas?|pastillas?|unidades?|un\b|u\b)/i);
         const unidades = mUn ? parseInt(mUn[1],10) : 0;
+        // Costo por lavado: única unidad que permite comparar líquidos con cápsulas en la
+        // misma lista. Una cápsula rinde un lavado; para los líquidos se asume la dosis
+        // estándar de ML_POR_LAVADO. Solo aplica a detergentes.
+        const esDetergente = categoria.startsWith("detergente");
+        const lavados = !esDetergente ? 0
+          : ml>0        ? ml/ML_POR_LAVADO
+          : unidades>0  ? unidades
+          : 0;
         return {
           fecha:    r["fecha"]||"",
           cadena:   (r["cadena"]||"").trim().toUpperCase(),
@@ -221,8 +233,10 @@ export const handler = async () => {
           precio,
           ml,
           unidades,
-          litro:    ml>0 ? Math.round(precio/(ml/1000)) : 0,
+          lavados:   Math.round(lavados),
+          litro:     ml>0 ? Math.round(precio/(ml/1000)) : 0,
           porUnidad: (!ml && unidades>0) ? Math.round(precio/unidades) : 0,
+          porLavado: lavados>0 ? Math.round(precio/lavados) : 0,
           esNanolife: /nanolife/i.test(r["marca"]||""),
         };
       }).filter(r=>r.cadena && r.categoria && r.precio>0 && (r.ml>0 || r.unidades>0));
