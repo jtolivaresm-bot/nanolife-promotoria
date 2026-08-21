@@ -82,17 +82,6 @@ const MESES_ES = ["ene","feb","mar","abr","may","jun","jul","ago","sep","oct","n
 const MESES_EN = ["jan","feb","mar","apr","may","jun","jul","aug","sep","oct","nov","dec"];
 const MESES_IDX = { ene:0,jan:0, feb:1, mar:2, abr:3,apr:3, may:4, jun:5, jul:6, ago:7,aug:7, sep:8, oct:9, nov:10, dic:11,dec:11 };
 
-// Cadena de retail de una sala, inferida del prefijo de su nombre (mismo criterio que usa
-// el panel Admin Elite). Sirve para mostrarle al promotor el comparativo de precios de la
-// cadena donde está trabajando ese día.
-function cadenaDeSala(nombreSala) {
-  const n = (nombreSala||"").normalize("NFD").replace(/[̀-ͯ]/g,"").toUpperCase().trim();
-  if (n.startsWith("HIPER LIDER") || n.startsWith("LIDER EXPRESS") || n.startsWith("LIDER")) return "LIDER";
-  if (n.startsWith("EASY"))   return "EASY";
-  if (n.startsWith("TOTTUS")) return "TOTTUS";
-  return "";
-}
-
 // Versión de getSalaIdParaHoy que acepta una fecha específica (YYYY-MM-DD)
 function getSalaIdParaHoy_fecha(promotor, fecha) {
   if (!promotor) return null;
@@ -706,7 +695,7 @@ export default function App() {
         <div className="nl-screen">
           {tab==="inicio"   && <Inicio   rec={rec} comm={comm} steps={steps} doneCount={doneCount} pct={pct} fecha={fecha} sala={sala} setTab={setTab} setTurno={setTurno} pid={pid} db={db} configVersion={configVersion} marcacionesSheet={marcacionesState} ventasB2BSheet={ventasB2BState}/>}
           {tab==="marcar"   && <Marcar   rec={rec} updateRec={updateRec} sala={sala} cfg={db.config} turno={turno} comm={comm} pid={pid}/>}
-          {tab==="capacita" && <Capacitacion training={db.training} seenIds={seenIds} onMarkSeen={handleMarkSeen} precios={preciosState} cadenaSala={cadenaDeSala(sala?.nombre)}/>}
+          {tab==="capacita" && <Capacitacion training={db.training} seenIds={seenIds} onMarkSeen={handleMarkSeen} precios={preciosState}/>}
         </div>
 
         {/* TAB BAR */}
@@ -1819,39 +1808,30 @@ const CAT_COLORS = [
   { color:"#4338CA", bg:"#EEF2FF" },
 ];
 
-/* Comparativo de precios por litro contra la competencia, para tener el argumento a mano
-   en sala. Los datos vienen del relevamiento de precios (hoja Precios_Competencia). */
-const CAT_LABEL = {
-  limpiapisos:        "Limpiapisos",
-  detergente_liquido: "Detergente líquido",
-  lavalozas:          "Lavalozas",
-  limpiador:          "Otros limpiadores",
-};
+/* Comparativo de precios contra la competencia en Lider, para tener el argumento a mano
+   en sala. Los datos vienen del relevamiento de precios (hoja Precios_Competencia).
+   Los líquidos se comparan por litro; las cápsulas por unidad (no traen litraje). */
 const fmtP = n => "$" + Math.round(n||0).toLocaleString("es-CL");
+const CADENA_COMPARATIVO = "LIDER";
 
-function ComparativoPrecios({ precios, cadenaSala, onClose }) {
-  const cadenas = useMemo(()=>[...new Set(precios.map(p=>p.cadena))].sort(),[precios]);
-  const [cadena, setCadena] = useState(cadenas.includes(cadenaSala) ? cadenaSala : cadenas[0]||"");
+function ComparativoPrecios({ precios, onClose }) {
+  const [tab, setTab] = useState("limpiapisos");
+  const filas = useMemo(()=>precios.filter(p=>p.cadena===CADENA_COMPARATIVO),[precios]);
 
-  const secciones = useMemo(()=>{
-    const filas = precios.filter(p=>p.cadena===cadena);
-    const map = new Map();
-    filas.forEach(p=>{
-      if(!map.has(p.categoria)) map.set(p.categoria, []);
-      map.get(p.categoria).push(p);
-    });
-    // Categorías donde Nanolife compite primero; dentro, del más barato por litro al más caro.
-    return [...map.entries()]
-      .map(([key, items])=>({
-        key,
-        label: CAT_LABEL[key] || key.replace(/_/g," "),
-        items: items.sort((a,b)=>a.litro-b.litro),
-        tieneNano: items.some(i=>i.esNanolife),
-      }))
-      .sort((a,b)=> (b.tieneNano-a.tieneNano) || a.label.localeCompare(b.label));
-  },[precios,cadena]);
+  // Cada bloque compara productos equivalentes entre sí, con su propia unidad.
+  const bloques = useMemo(()=>{
+    const de = (cat, campo) => filas.filter(p=>p.categoria===cat && p[campo]>0)
+                                    .sort((a,b)=>a[campo]-b[campo]);
+    if (tab==="limpiapisos") {
+      return [{ titulo:null, unidad:"L", campo:"litro", items: de("limpiapisos","litro") }];
+    }
+    return [
+      { titulo:"Cápsulas",  unidad:"cáps.", campo:"porUnidad", items: de("detergente_capsulas","porUnidad") },
+      { titulo:"Líquidos",  unidad:"L",     campo:"litro",     items: de("detergente_liquido","litro") },
+    ].filter(b=>b.items.length);
+  },[filas,tab]);
 
-  const fecha = precios.find(p=>p.cadena===cadena)?.fecha || "";
+  const fecha = filas[0]?.fecha || "";
 
   return (
     <div className="scrim" onClick={onClose} style={{alignItems:"flex-end"}}>
@@ -1859,52 +1839,51 @@ function ComparativoPrecios({ precios, cadenaSala, onClose }) {
         <div style={{padding:"14px 16px",background:"var(--surface)",borderBottom:"1px solid var(--line)",display:"flex",justifyContent:"space-between",alignItems:"center",gap:10}}>
           <div style={{minWidth:0}}>
             <b style={{fontSize:15}}>Comparativo de precios</b>
-            <div className="muted" style={{fontSize:11.5,marginTop:1}}>Precio por litro{fecha?` · relevado ${fecha}`:""}</div>
+            <div className="muted" style={{fontSize:11.5,marginTop:1}}>Lider{fecha?` · relevado ${fecha}`:""}</div>
           </div>
           <button aria-label="Cerrar" onClick={onClose}
             style={{background:"var(--bg)",border:"none",borderRadius:9,width:34,height:34,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><X size={18}/></button>
         </div>
 
-        {/* Selector de cadena */}
-        {cadenas.length>1 && (
-          <div style={{display:"flex",gap:8,padding:"12px 16px 4px",overflowX:"auto",flexShrink:0}}>
-            {cadenas.map(c=>(
-              <button key={c} onClick={()=>setCadena(c)}
-                style={{padding:"7px 15px",borderRadius:99,border:"1px solid "+(c===cadena?"var(--teal)":"var(--line)"),background:c===cadena?"var(--teal)":"var(--surface)",color:c===cadena?"#fff":"var(--ink)",fontWeight:600,fontSize:13,cursor:"pointer",whiteSpace:"nowrap",flexShrink:0}}>
-                {c}
-              </button>
-            ))}
-          </div>
-        )}
+        <div style={{display:"flex",gap:8,padding:"12px 16px 4px",flexShrink:0}}>
+          {[["limpiapisos","Limpiapisos"],["detergentes","Detergentes"]].map(([k,label])=>(
+            <button key={k} onClick={()=>setTab(k)}
+              style={{flex:1,padding:"9px 12px",borderRadius:99,border:"1px solid "+(k===tab?"var(--teal)":"var(--line)"),background:k===tab?"var(--teal)":"var(--surface)",color:k===tab?"#fff":"var(--ink)",fontWeight:600,fontSize:13.5,cursor:"pointer"}}>
+              {label}
+            </button>
+          ))}
+        </div>
 
         <div style={{overflowY:"auto",padding:"8px 16px 24px"}}>
-          {secciones.length===0 && <div className="empty" style={{marginTop:20}}>Sin datos de precios para esta cadena.</div>}
-          {secciones.map(sec=>{
-            const max = Math.max(...sec.items.map(i=>i.litro), 1);
-            const nano = sec.items.find(i=>i.esNanolife);
-            const pos  = nano ? sec.items.indexOf(nano)+1 : 0;
+          {bloques.length===0 && <div className="empty" style={{marginTop:20}}>Sin datos de precios para esta categoría.</div>}
+          {bloques.map(bl=>{
+            const max  = Math.max(...bl.items.map(i=>i[bl.campo]), 1);
+            const nano = bl.items.find(i=>i.esNanolife);
+            const pos  = nano ? bl.items.indexOf(nano)+1 : 0;
             return (
-              <div key={sec.key} style={{marginTop:16}}>
+              <div key={bl.titulo||"unico"} style={{marginTop:14}}>
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:8}}>
-                  <b style={{fontSize:14}}>{sec.label}</b>
-                  {nano && <span className="muted" style={{fontSize:11.5}}>Nanolife {pos}° de {sec.items.length}</span>}
+                  <b style={{fontSize:14}}>{bl.titulo || "Precio por litro"}</b>
+                  {nano
+                    ? <span style={{fontSize:11.5,fontWeight:600,color:"var(--teal-d)"}}>Nanolife {pos}° de {bl.items.length}</span>
+                    : <span className="muted" style={{fontSize:11.5}}>Sin producto Nanolife</span>}
                 </div>
                 <div style={{background:"var(--surface)",border:"1px solid var(--line)",borderRadius:14,overflow:"hidden"}}>
-                  {sec.items.map((p,i)=>(
+                  {bl.items.map((p,i)=>(
                     <div key={i} style={{padding:"9px 12px",borderTop:i?"1px solid var(--line)":"none",background:p.esNanolife?"#E4F4F1":"transparent"}}>
                       <div style={{display:"flex",justifyContent:"space-between",gap:10,alignItems:"baseline"}}>
                         <span style={{fontSize:12.5,fontWeight:p.esNanolife?700:600,color:p.esNanolife?"var(--teal-d)":"var(--ink)",minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
                           {p.esNanolife?"★ ":""}{p.marca}
                         </span>
                         <span style={{fontSize:13,fontWeight:700,color:p.esNanolife?"var(--teal-d)":"var(--ink)",flexShrink:0}}>
-                          {fmtP(p.litro)}<span style={{fontSize:10,fontWeight:500}}>/L</span>
+                          {fmtP(p[bl.campo])}<span style={{fontSize:10,fontWeight:500}}>/{bl.unidad}</span>
                         </span>
                       </div>
                       <div style={{height:4,background:"var(--line)",borderRadius:99,overflow:"hidden",margin:"5px 0 3px"}}>
-                        <div style={{height:"100%",width:`${(p.litro/max)*100}%`,background:p.esNanolife?"var(--teal)":"#CBD5E1",borderRadius:99}}/>
+                        <div style={{height:"100%",width:`${(p[bl.campo]/max)*100}%`,background:p.esNanolife?"var(--teal)":"#CBD5E1",borderRadius:99}}/>
                       </div>
                       <div className="muted" style={{fontSize:11,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
-                        {(p.ml/1000).toLocaleString("es-CL")} L · {fmtP(p.precio)} · {p.producto}
+                        {bl.unidad==="L" ? `${(p.ml/1000).toLocaleString("es-CL")} L` : `${p.unidades} cáps.`} · {fmtP(p.precio)} · {p.producto}
                       </div>
                     </div>
                   ))}
@@ -1918,7 +1897,7 @@ function ComparativoPrecios({ precios, cadenaSala, onClose }) {
   );
 }
 
-function Capacitacion({ training, seenIds, onMarkSeen, precios=[], cadenaSala="" }) {
+function Capacitacion({ training, seenIds, onMarkSeen, precios=[] }) {
   const [active, setActive] = useState(null); // item abierto en el reproductor
   const [verPrecios, setVerPrecios] = useState(false);
   const icon = t => t==="video"?<Video size={17}/>:t==="pdf"?<FileText size={17}/>:t==="imagen"?<ImageIcon size={17}/>:<FileText size={17}/>;
@@ -2038,7 +2017,7 @@ function Capacitacion({ training, seenIds, onMarkSeen, precios=[], cadenaSala=""
       )}
 
       {verPrecios && (
-        <ComparativoPrecios precios={precios} cadenaSala={cadenaSala} onClose={()=>setVerPrecios(false)}/>
+        <ComparativoPrecios precios={precios} onClose={()=>setVerPrecios(false)}/>
       )}
     </>
   );
