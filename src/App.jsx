@@ -82,6 +82,17 @@ const MESES_ES = ["ene","feb","mar","abr","may","jun","jul","ago","sep","oct","n
 const MESES_EN = ["jan","feb","mar","apr","may","jun","jul","aug","sep","oct","nov","dec"];
 const MESES_IDX = { ene:0,jan:0, feb:1, mar:2, abr:3,apr:3, may:4, jun:5, jul:6, ago:7,aug:7, sep:8, oct:9, nov:10, dic:11,dec:11 };
 
+// Cadena de retail de una sala, inferida del prefijo de su nombre (mismo criterio que usa
+// el panel Admin Elite). Sirve para mostrarle al promotor el comparativo de precios de la
+// cadena donde está trabajando ese día.
+function cadenaDeSala(nombreSala) {
+  const n = (nombreSala||"").normalize("NFD").replace(/[̀-ͯ]/g,"").toUpperCase().trim();
+  if (n.startsWith("HIPER LIDER") || n.startsWith("LIDER EXPRESS") || n.startsWith("LIDER")) return "LIDER";
+  if (n.startsWith("EASY"))   return "EASY";
+  if (n.startsWith("TOTTUS")) return "TOTTUS";
+  return "";
+}
+
 // Versión de getSalaIdParaHoy que acepta una fecha específica (YYYY-MM-DD)
 function getSalaIdParaHoy_fecha(promotor, fecha) {
   if (!promotor) return null;
@@ -487,6 +498,7 @@ export default function App() {
   const [marcacionesState, setMarcacionesState] = useState([]);
   const [ventasB2BState, setVentasB2BState] = useState([]);
   const [uploadsPendientes, setUploadsPendientes] = useState(0);
+  const [preciosState, setPreciosState] = useState([]);      // comparativo de precios de competencia
   const [capacServer, setCapacServer] = useState([]);        // progreso desde el Sheet: [{promotorId,itemId}]
   const [capacSeen, setCapacSeen] = useState(loadCapacSeen); // progreso local optimista: { pid: [itemId] }
   const fecha = todayISO();
@@ -517,7 +529,7 @@ export default function App() {
     // Load config from Google in background
     fetch("/.netlify/functions/config-reader")
       .then(r=>r.ok ? r.json() : Promise.reject(r.status))
-      .then(({promotores, salas, stock, training, ventasB2B, marcaciones, capacitacion})=>{
+      .then(({promotores, salas, stock, training, ventasB2B, marcaciones, capacitacion, precios})=>{
         if(promotores?.length) {
           PROMOTORES.splice(0, PROMOTORES.length, ...promotores);
           if (!PROMOTORES.find(p=>p.id==="udemo")) PROMOTORES.push(PROMOTOR_DEMO);
@@ -539,6 +551,7 @@ export default function App() {
           setDb(prev=>({ ...prev, training }));
         }
         if(capacitacion) setCapacServer(capacitacion);
+        if(precios?.length) setPreciosState(precios);
         // Actualizar estado React para forzar re-render del LoginScreen
         setPromotoresState([...PROMOTORES.filter(p=>p.id!=="udemo"), PROMOTOR_DEMO]);
         setConfigVersion(v=>v+1);
@@ -693,7 +706,7 @@ export default function App() {
         <div className="nl-screen">
           {tab==="inicio"   && <Inicio   rec={rec} comm={comm} steps={steps} doneCount={doneCount} pct={pct} fecha={fecha} sala={sala} setTab={setTab} setTurno={setTurno} pid={pid} db={db} configVersion={configVersion} marcacionesSheet={marcacionesState} ventasB2BSheet={ventasB2BState}/>}
           {tab==="marcar"   && <Marcar   rec={rec} updateRec={updateRec} sala={sala} cfg={db.config} turno={turno} comm={comm} pid={pid}/>}
-          {tab==="capacita" && <Capacitacion training={db.training} seenIds={seenIds} onMarkSeen={handleMarkSeen}/>}
+          {tab==="capacita" && <Capacitacion training={db.training} seenIds={seenIds} onMarkSeen={handleMarkSeen} precios={preciosState} cadenaSala={cadenaDeSala(sala?.nombre)}/>}
         </div>
 
         {/* TAB BAR */}
@@ -1806,8 +1819,108 @@ const CAT_COLORS = [
   { color:"#4338CA", bg:"#EEF2FF" },
 ];
 
-function Capacitacion({ training, seenIds, onMarkSeen }) {
+/* Comparativo de precios por litro contra la competencia, para tener el argumento a mano
+   en sala. Los datos vienen del relevamiento de precios (hoja Precios_Competencia). */
+const CAT_LABEL = {
+  limpiapisos:        "Limpiapisos",
+  detergente_liquido: "Detergente líquido",
+  lavalozas:          "Lavalozas",
+  limpiador:          "Otros limpiadores",
+};
+const fmtP = n => "$" + Math.round(n||0).toLocaleString("es-CL");
+
+function ComparativoPrecios({ precios, cadenaSala, onClose }) {
+  const cadenas = useMemo(()=>[...new Set(precios.map(p=>p.cadena))].sort(),[precios]);
+  const [cadena, setCadena] = useState(cadenas.includes(cadenaSala) ? cadenaSala : cadenas[0]||"");
+
+  const secciones = useMemo(()=>{
+    const filas = precios.filter(p=>p.cadena===cadena);
+    const map = new Map();
+    filas.forEach(p=>{
+      if(!map.has(p.categoria)) map.set(p.categoria, []);
+      map.get(p.categoria).push(p);
+    });
+    // Categorías donde Nanolife compite primero; dentro, del más barato por litro al más caro.
+    return [...map.entries()]
+      .map(([key, items])=>({
+        key,
+        label: CAT_LABEL[key] || key.replace(/_/g," "),
+        items: items.sort((a,b)=>a.litro-b.litro),
+        tieneNano: items.some(i=>i.esNanolife),
+      }))
+      .sort((a,b)=> (b.tieneNano-a.tieneNano) || a.label.localeCompare(b.label));
+  },[precios,cadena]);
+
+  const fecha = precios.find(p=>p.cadena===cadena)?.fecha || "";
+
+  return (
+    <div className="scrim" onClick={onClose} style={{alignItems:"flex-end"}}>
+      <div onClick={e=>e.stopPropagation()} style={{width:"100%",maxHeight:"92%",background:"var(--bg)",borderRadius:"22px 22px 0 0",display:"flex",flexDirection:"column",overflow:"hidden"}}>
+        <div style={{padding:"14px 16px",background:"var(--surface)",borderBottom:"1px solid var(--line)",display:"flex",justifyContent:"space-between",alignItems:"center",gap:10}}>
+          <div style={{minWidth:0}}>
+            <b style={{fontSize:15}}>Comparativo de precios</b>
+            <div className="muted" style={{fontSize:11.5,marginTop:1}}>Precio por litro{fecha?` · relevado ${fecha}`:""}</div>
+          </div>
+          <button aria-label="Cerrar" onClick={onClose}
+            style={{background:"var(--bg)",border:"none",borderRadius:9,width:34,height:34,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><X size={18}/></button>
+        </div>
+
+        {/* Selector de cadena */}
+        {cadenas.length>1 && (
+          <div style={{display:"flex",gap:8,padding:"12px 16px 4px",overflowX:"auto",flexShrink:0}}>
+            {cadenas.map(c=>(
+              <button key={c} onClick={()=>setCadena(c)}
+                style={{padding:"7px 15px",borderRadius:99,border:"1px solid "+(c===cadena?"var(--teal)":"var(--line)"),background:c===cadena?"var(--teal)":"var(--surface)",color:c===cadena?"#fff":"var(--ink)",fontWeight:600,fontSize:13,cursor:"pointer",whiteSpace:"nowrap",flexShrink:0}}>
+                {c}
+              </button>
+            ))}
+          </div>
+        )}
+
+        <div style={{overflowY:"auto",padding:"8px 16px 24px"}}>
+          {secciones.length===0 && <div className="empty" style={{marginTop:20}}>Sin datos de precios para esta cadena.</div>}
+          {secciones.map(sec=>{
+            const max = Math.max(...sec.items.map(i=>i.litro), 1);
+            const nano = sec.items.find(i=>i.esNanolife);
+            const pos  = nano ? sec.items.indexOf(nano)+1 : 0;
+            return (
+              <div key={sec.key} style={{marginTop:16}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:8}}>
+                  <b style={{fontSize:14}}>{sec.label}</b>
+                  {nano && <span className="muted" style={{fontSize:11.5}}>Nanolife {pos}° de {sec.items.length}</span>}
+                </div>
+                <div style={{background:"var(--surface)",border:"1px solid var(--line)",borderRadius:14,overflow:"hidden"}}>
+                  {sec.items.map((p,i)=>(
+                    <div key={i} style={{padding:"9px 12px",borderTop:i?"1px solid var(--line)":"none",background:p.esNanolife?"#E4F4F1":"transparent"}}>
+                      <div style={{display:"flex",justifyContent:"space-between",gap:10,alignItems:"baseline"}}>
+                        <span style={{fontSize:12.5,fontWeight:p.esNanolife?700:600,color:p.esNanolife?"var(--teal-d)":"var(--ink)",minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                          {p.esNanolife?"★ ":""}{p.marca}
+                        </span>
+                        <span style={{fontSize:13,fontWeight:700,color:p.esNanolife?"var(--teal-d)":"var(--ink)",flexShrink:0}}>
+                          {fmtP(p.litro)}<span style={{fontSize:10,fontWeight:500}}>/L</span>
+                        </span>
+                      </div>
+                      <div style={{height:4,background:"var(--line)",borderRadius:99,overflow:"hidden",margin:"5px 0 3px"}}>
+                        <div style={{height:"100%",width:`${(p.litro/max)*100}%`,background:p.esNanolife?"var(--teal)":"#CBD5E1",borderRadius:99}}/>
+                      </div>
+                      <div className="muted" style={{fontSize:11,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                        {(p.ml/1000).toLocaleString("es-CL")} L · {fmtP(p.precio)} · {p.producto}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Capacitacion({ training, seenIds, onMarkSeen, precios=[], cadenaSala="" }) {
   const [active, setActive] = useState(null); // item abierto en el reproductor
+  const [verPrecios, setVerPrecios] = useState(false);
   const icon = t => t==="video"?<Video size={17}/>:t==="pdf"?<FileText size={17}/>:t==="imagen"?<ImageIcon size={17}/>:<FileText size={17}/>;
   const uniforme = training.find(m=>m.tipo==="uniforme");
   const resto = training.filter(m=>m.tipo!=="uniforme");
@@ -1853,6 +1966,24 @@ function Capacitacion({ training, seenIds, onMarkSeen }) {
           </div>
           {pct===100 && <div style={{fontSize:12.5,color:"var(--teal-d)",marginTop:9,fontWeight:600}}>🎉 ¡Completaste toda la capacitación!</div>}
         </div>
+      )}
+
+      {/* Comparativo de precios: argumento de venta a mano en sala */}
+      {precios.length>0 && (
+        <>
+          <div className="sec-title"><span style={{width:10,height:10,borderRadius:3,background:"#B45309",display:"inline-block",flexShrink:0}}/> Argumentos de venta</div>
+          <button onClick={()=>setVerPrecios(true)}
+            style={{width:"100%",background:"#FEF3E2",border:"1px solid #B4530922",borderRadius:16,padding:"14px",display:"flex",alignItems:"center",gap:12,cursor:"pointer",textAlign:"left",marginTop:10}}>
+            <div style={{width:42,height:42,borderRadius:11,background:"white",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,color:"#B45309",boxShadow:"0 1px 4px rgba(0,0,0,.08)"}}>
+              <span style={{fontSize:20}}>🏷️</span>
+            </div>
+            <div style={{flex:1,minWidth:0}}>
+              <div style={{fontWeight:600,fontSize:13.5,color:"#B45309"}}>Comparativo de precios</div>
+              <div className="muted" style={{fontSize:12,marginTop:2}}>Precio por litro vs. la competencia</div>
+            </div>
+            <ChevronRight size={17} color="#B45309"/>
+          </button>
+        </>
       )}
 
       {uniforme && (
@@ -1904,6 +2035,10 @@ function Capacitacion({ training, seenIds, onMarkSeen }) {
           onMarkSeen={()=>onMarkSeen(active)}
           onClose={()=>setActive(null)}
         />
+      )}
+
+      {verPrecios && (
+        <ComparativoPrecios precios={precios} cadenaSala={cadenaSala} onClose={()=>setVerPrecios(false)}/>
       )}
     </>
   );
