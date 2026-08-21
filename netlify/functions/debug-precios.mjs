@@ -52,10 +52,14 @@ export const handler = async () => {
       return Object.entries(m).sort((a,b)=>b[1]-a[1]);
     };
 
-    // Filas de limpiapisos y de Nanolife (lo que nos interesa para el comparativo)
-    const esLimpiapiso = r => (r[iCat]||"").toLowerCase().includes("limpiapiso")
-      || (r[iCat]||"").toLowerCase().includes("piso");
-    const limpiapisos = body.filter(esLimpiapiso);
+    const iProd = col("producto"), iNorm = col("precio_normal"), iTarj = col("precio_tarjeta");
+    // "limpiador" mezcla limpiapisos con antigrasa/multiuso: filtramos por nombre de producto.
+    const esPiso = r => (r[iCat]||"").toLowerCase()==="limpiador"
+      && /piso/i.test(r[iProd]||"");
+    const pisos = body.filter(esPiso).map(r=>({
+      fecha:r[iFecha], cadena:r[iCadena], marca:r[iMarca], producto:r[iProd],
+      normal:r[iNorm], tarjeta:r[iTarj], ml:r[iMl],
+    }));
     const nanolife = body.filter(r => (r[iMarca]||"").toLowerCase().includes("nanolife"));
 
     return { statusCode: 200, headers, body: JSON.stringify({
@@ -65,8 +69,8 @@ export const handler = async () => {
       cadenas: cuenta(iCadena),
       fechas: cuenta(iFecha).slice(0,10),
       marcasTop: cuenta(iMarca).slice(0,25),
-      limpiapisosCount: limpiapisos.length,
-      limpiapisosMuestra: limpiapisos.slice(0,40),
+      pisosCount: pisos.length,
+      pisos,
       nanolifeCount: nanolife.length,
       nanolifeFilas: nanolife.slice(0,40),
     }, null, 2) };
