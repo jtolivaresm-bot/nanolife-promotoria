@@ -1,8 +1,7 @@
 /**
- * TEMPORAL — diagnóstico para inspeccionar la estructura del Sheet de precios de
- * competencia antes de construir la feature real. Borrar este archivo una vez
- * confirmada la estructura (tabs, headers, columnas).
- * GET /.netlify/functions/_debug-precios
+ * TEMPORAL — diagnóstico para inspeccionar el Sheet de precios de competencia antes de
+ * construir la feature real. Borrar este archivo una vez confirmada la estructura.
+ * GET /.netlify/functions/debug-precios
  */
 
 const PRECIOS_SHEET_ID = "1a6ubAF5sZjVrqmtesLbgpi8mOl-6hIs2xkkMlbik5lY";
@@ -34,27 +33,43 @@ export const handler = async () => {
   try {
     const token = await getToken(process.env.GOOGLE_SERVICE_ACCOUNT_KEY, "https://www.googleapis.com/auth/spreadsheets.readonly");
 
-    // 1. Metadata: lista de tabs (nombre + gid)
-    const metaRes = await fetch(
-      `https://sheets.googleapis.com/v4/spreadsheets/${PRECIOS_SHEET_ID}?fields=sheets.properties`,
+    const r = await fetch(
+      `https://sheets.googleapis.com/v4/spreadsheets/${PRECIOS_SHEET_ID}/values/${encodeURIComponent("Precios_Competencia!A:J")}`,
       { headers: { Authorization: `Bearer ${token}` } }
     );
-    if (!metaRes.ok) throw new Error(`metadata: ${metaRes.status} ${await metaRes.text()}`);
-    const meta = await metaRes.json();
-    const tabs = (meta.sheets||[]).map(s=>s.properties);
+    if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
+    const rows = (await r.json()).values || [];
+    const head = rows[0] || [];
+    const body = rows.slice(1);
+    const col = n => head.indexOf(n);
 
-    // 2. Primeras filas de cada tab, para ver headers/estructura
-    const muestras = {};
-    for (const t of tabs) {
-      const range = `${t.title}!A1:J15`;
-      const r = await fetch(
-        `https://sheets.googleapis.com/v4/spreadsheets/${PRECIOS_SHEET_ID}/values/${encodeURIComponent(range)}`,
-        { headers: { Authorization: `Bearer ${token}` } }
-      );
-      muestras[t.title] = r.ok ? (await r.json()).values || [] : `ERROR ${r.status}`;
-    }
+    const iCat = col("categoria"), iMarca = col("marca"), iCadena = col("cadena"), iFecha = col("fecha"), iMl = col("ml");
 
-    return { statusCode: 200, headers, body: JSON.stringify({ tabs, muestras }, null, 2) };
+    // Resumen agregado (evita devolver miles de filas)
+    const cuenta = (idx) => {
+      const m = {};
+      body.forEach(r => { const v = (r[idx]||"(vacío)").trim(); m[v] = (m[v]||0)+1; });
+      return Object.entries(m).sort((a,b)=>b[1]-a[1]);
+    };
+
+    // Filas de limpiapisos y de Nanolife (lo que nos interesa para el comparativo)
+    const esLimpiapiso = r => (r[iCat]||"").toLowerCase().includes("limpiapiso")
+      || (r[iCat]||"").toLowerCase().includes("piso");
+    const limpiapisos = body.filter(esLimpiapiso);
+    const nanolife = body.filter(r => (r[iMarca]||"").toLowerCase().includes("nanolife"));
+
+    return { statusCode: 200, headers, body: JSON.stringify({
+      totalFilas: body.length,
+      headers: head,
+      categorias: cuenta(iCat),
+      cadenas: cuenta(iCadena),
+      fechas: cuenta(iFecha).slice(0,10),
+      marcasTop: cuenta(iMarca).slice(0,25),
+      limpiapisosCount: limpiapisos.length,
+      limpiapisosMuestra: limpiapisos.slice(0,40),
+      nanolifeCount: nanolife.length,
+      nanolifeFilas: nanolife.slice(0,40),
+    }, null, 2) };
   } catch (err) {
     return { statusCode: 500, headers, body: JSON.stringify({ error: err.message }) };
   }
