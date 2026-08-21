@@ -93,6 +93,9 @@ export const handler = async () => {
     const configSheetId = process.env.GOOGLE_CONFIG_SHEET_ID;
     const salesSheetId  = process.env.GOOGLE_SHEET_ID;
     const folderId      = process.env.GOOGLE_CAPACITACION_FOLDER;
+    // Sheet de retail intelligence (pestaña Precios_Competencia). Configurable por env var;
+    // si no está, se usa el sheet conocido — así funciona sin tocar Netlify.
+    const preciosSheetId = process.env.GOOGLE_PRECIOS_SHEET_ID || "1a6ubAF5sZjVrqmtesLbgpi8mOl-6hIs2xkkMlbik5lY";
 
     // Token para Sheets y para Drive (en paralelo)
     const [tokenSheet, tokenDrive] = await Promise.all([
@@ -102,7 +105,7 @@ export const handler = async () => {
 
     // Leer config (promotores/salas/stock) y ventas en paralelo
     // Capacitación y Marcaciones son opcionales y no bloquean
-    const [promRows, salaRows, stockRows, b2bRows, marcRows, capacRows, training] = await Promise.all([
+    const [promRows, salaRows, stockRows, b2bRows, marcRows, capacRows, preciosRows, training] = await Promise.all([
       sheetValues(tokenSheet, configSheetId, "Promotores!A:Z"),
       sheetValues(tokenSheet, configSheetId, "Salas!A:Z"),
       sheetValues(tokenSheet, configSheetId, "Stock!A:Z"),
@@ -110,6 +113,8 @@ export const handler = async () => {
       salesSheetId ? sheetValues(tokenSheet, salesSheetId, "Marcaciones!A:L").catch(()=>[]) : Promise.resolve([]),
       // Progreso de capacitación (opcional; no bloquea si la hoja aún no existe)
       salesSheetId ? sheetValues(tokenSheet, salesSheetId, "CapacitacionProgreso!A:G").catch(()=>[]) : Promise.resolve([]),
+      // Precios de competencia (sheet aparte de retail intelligence; opcional)
+      preciosSheetId ? sheetValues(tokenSheet, preciosSheetId, "Precios_Competencia!A:J").catch(()=>[]) : Promise.resolve([]),
       folderId ? buildTraining(tokenDrive, folderId).catch(()=>[]) : Promise.resolve([]),
     ]);
 
@@ -185,10 +190,46 @@ export const handler = async () => {
       fecha:      r["Fecha"]||r["fecha"]||"",
     })).filter(r=>r.promotorId && r.itemId);
 
+    // Precios de competencia → comparativo precio por litro, para que el promotor tenga el
+    // argumento a mano en sala. Solo se envía la medición MÁS RECIENTE de cada cadena
+    // (la planilla acumula histórico) y solo filas con litraje y precio, que son las
+    // únicas comparables litro a litro.
+    const precios = (()=>{
+      const filas = toObjects(preciosRows).map(r=>{
+        const num = v => {
+          const n = parseFloat(String(v||"").replace(/[^0-9.,]/g,"").replace(/\.(?=\d{3}\b)/g,"").replace(",","."));
+          return isNaN(n) ? 0 : n;
+        };
+        const ml     = num(r["ml"]);
+        const precio = num(r["precio_normal"]);
+        const prod   = r["producto"]||"";
+        const cat    = (r["categoria"]||"").trim();
+        // "limpiador" mezcla limpiapisos con antigrasa/multiuso: los de piso se separan
+        // en su propia categoría para poder compararlos entre sí.
+        const categoria = (cat==="limpiador" && /piso/i.test(prod)) ? "limpiapisos" : cat;
+        return {
+          fecha:    r["fecha"]||"",
+          cadena:   (r["cadena"]||"").trim().toUpperCase(),
+          categoria,
+          marca:    (r["marca"]||"").trim(),
+          producto: prod,
+          precio,
+          ml,
+          litro:    ml>0 ? Math.round(precio/(ml/1000)) : 0,
+          esNanolife: /nanolife/i.test(r["marca"]||""),
+        };
+      }).filter(r=>r.cadena && r.categoria && r.ml>0 && r.precio>0);
+
+      // Última fecha medida por cadena (cada cadena se releva en días distintos)
+      const ultima = {};
+      filas.forEach(r=>{ if(r.fecha > (ultima[r.cadena]||"")) ultima[r.cadena] = r.fecha; });
+      return filas.filter(r=>r.fecha === ultima[r.cadena]);
+    })();
+
     return {
       statusCode: 200,
       headers,
-      body: JSON.stringify({ promotores, salas, stock, training, ventasB2B, marcaciones, capacitacion }),
+      body: JSON.stringify({ promotores, salas, stock, training, ventasB2B, marcaciones, capacitacion, precios }),
     };
 
   } catch(err) {
