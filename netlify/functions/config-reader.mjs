@@ -190,10 +190,10 @@ export const handler = async () => {
       fecha:      r["Fecha"]||r["fecha"]||"",
     })).filter(r=>r.promotorId && r.itemId);
 
-    // Precios de competencia → comparativo precio por litro, para que el promotor tenga el
-    // argumento a mano en sala. Solo se envía la medición MÁS RECIENTE de cada cadena
-    // (la planilla acumula histórico) y solo filas con litraje y precio, que son las
-    // únicas comparables litro a litro.
+    // Precios de competencia → comparativo para que el promotor tenga el argumento a mano
+    // en sala. Solo se envía la medición MÁS RECIENTE de cada cadena (la planilla acumula
+    // histórico). Se comparan por litro los productos líquidos, y por unidad las cápsulas
+    // (que no traen litraje).
     const precios = (()=>{
       const filas = toObjects(preciosRows).map(r=>{
         const num = v => {
@@ -207,6 +207,11 @@ export const handler = async () => {
         // "limpiador" mezcla limpiapisos con antigrasa/multiuso: los de piso se separan
         // en su propia categoría para poder compararlos entre sí.
         const categoria = (cat==="limpiador" && /piso/i.test(prod)) ? "limpiapisos" : cat;
+        // Las cápsulas no traen litraje; la cantidad viene en el nombre ("25 cápsulas",
+        // "30 u"). Se exige la palabra de unidad pegada al número para no capturar cosas
+        // como "Fórmula 3 en 1".
+        const mUn = prod.match(/(\d+)\s*(c[áa]psulas?|pastillas?|unidades?|un\b|u\b)/i);
+        const unidades = mUn ? parseInt(mUn[1],10) : 0;
         return {
           fecha:    r["fecha"]||"",
           cadena:   (r["cadena"]||"").trim().toUpperCase(),
@@ -215,10 +220,12 @@ export const handler = async () => {
           producto: prod,
           precio,
           ml,
+          unidades,
           litro:    ml>0 ? Math.round(precio/(ml/1000)) : 0,
+          porUnidad: (!ml && unidades>0) ? Math.round(precio/unidades) : 0,
           esNanolife: /nanolife/i.test(r["marca"]||""),
         };
-      }).filter(r=>r.cadena && r.categoria && r.ml>0 && r.precio>0);
+      }).filter(r=>r.cadena && r.categoria && r.precio>0 && (r.ml>0 || r.unidades>0));
 
       // Última fecha medida por cadena (cada cadena se releva en días distintos)
       const ultima = {};
