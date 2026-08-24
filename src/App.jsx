@@ -1820,15 +1820,20 @@ function ComparativoPrecios({ precios, onClose }) {
 
   // Cada bloque compara productos equivalentes entre sí, con su propia unidad.
   const bloques = useMemo(()=>{
-    const de = (cat, campo) => filas.filter(p=>p.categoria===cat && p[campo]>0)
-                                    .sort((a,b)=>a[campo]-b[campo]);
     if (tab==="limpiapisos") {
-      return [{ titulo:null, unidad:"L", campo:"litro", items: de("limpiapisos","litro") }];
+      return [{
+        titulo:null, unidad:"L", campo:"litro", nota:null,
+        items: filas.filter(p=>p.categoria==="limpiapisos" && p.litro>0).sort((a,b)=>a.litro-b.litro),
+      }];
     }
-    return [
-      { titulo:"Cápsulas",  unidad:"cáps.", campo:"porUnidad", items: de("detergente_capsulas","porUnidad") },
-      { titulo:"Líquidos",  unidad:"L",     campo:"litro",     items: de("detergente_liquido","litro") },
-    ].filter(b=>b.items.length);
+    // Líquidos y cápsulas en una sola lista: el costo por lavado es la única unidad que
+    // los hace comparables (una cápsula rinde un lavado; el líquido, según la dosis).
+    return [{
+      titulo:null, unidad:"lavado", campo:"porLavado",
+      nota:"Líquidos calculados a 100 ml por lavado · 1 cápsula = 1 lavado",
+      items: filas.filter(p=>p.categoria.startsWith("detergente") && p.porLavado>0)
+                  .sort((a,b)=>a.porLavado-b.porLavado),
+    }];
   },[filas,tab]);
 
   const fecha = filas[0]?.fecha || "";
@@ -1860,14 +1865,22 @@ function ComparativoPrecios({ precios, onClose }) {
             const max  = Math.max(...bl.items.map(i=>i[bl.campo]), 1);
             const nano = bl.items.find(i=>i.esNanolife);
             const pos  = nano ? bl.items.indexOf(nano)+1 : 0;
+            // En detergentes conviven líquidos y cápsulas: además del puesto global se
+            // muestra el puesto entre cápsulas, que es donde Nanolife realmente compite.
+            const caps    = bl.items.filter(i=>i.unidades>0 && !i.ml);
+            const posCaps = nano && !nano.ml ? caps.indexOf(nano)+1 : 0;
             return (
               <div key={bl.titulo||"unico"} style={{marginTop:14}}>
-                <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:8}}>
-                  <b style={{fontSize:14}}>{bl.titulo || "Precio por litro"}</b>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:4,gap:10}}>
+                  <b style={{fontSize:14}}>{bl.titulo || (bl.unidad==="lavado"?"Costo por lavado":"Precio por litro")}</b>
                   {nano
-                    ? <span style={{fontSize:11.5,fontWeight:600,color:"var(--teal-d)"}}>Nanolife {pos}° de {bl.items.length}</span>
+                    ? <span style={{fontSize:11.5,fontWeight:600,color:"var(--teal-d)",textAlign:"right",flexShrink:0}}>
+                        Nanolife {pos}° de {bl.items.length}
+                        {posCaps ? <><br/><span style={{fontWeight:700}}>{posCaps}° entre cápsulas</span></> : null}
+                      </span>
                     : <span className="muted" style={{fontSize:11.5}}>Sin producto Nanolife</span>}
                 </div>
+                {bl.nota && <div className="muted" style={{fontSize:11,marginBottom:8,lineHeight:1.35}}>{bl.nota}</div>}
                 <div style={{background:"var(--surface)",border:"1px solid var(--line)",borderRadius:14,overflow:"hidden"}}>
                   {bl.items.map((p,i)=>(
                     <div key={i} style={{padding:"9px 12px",borderTop:i?"1px solid var(--line)":"none",background:p.esNanolife?"#E4F4F1":"transparent"}}>
@@ -1883,7 +1896,8 @@ function ComparativoPrecios({ precios, onClose }) {
                         <div style={{height:"100%",width:`${(p[bl.campo]/max)*100}%`,background:p.esNanolife?"var(--teal)":"#CBD5E1",borderRadius:99}}/>
                       </div>
                       <div className="muted" style={{fontSize:11,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
-                        {bl.unidad==="L" ? `${(p.ml/1000).toLocaleString("es-CL")} L` : `${p.unidades} cáps.`} · {fmtP(p.precio)} · {p.producto}
+                        {p.ml>0 ? `${(p.ml/1000).toLocaleString("es-CL")} L` : `${p.unidades} cáps.`}
+                        {bl.unidad==="lavado" ? ` · ${p.lavados} lavados` : ""} · {fmtP(p.precio)} · {p.producto}
                       </div>
                     </div>
                   ))}
