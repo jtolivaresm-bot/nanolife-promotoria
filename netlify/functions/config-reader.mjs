@@ -110,7 +110,7 @@ export const handler = async () => {
     // Leer config (promotores/salas/stock) y ventas en paralelo
     // Capacitación y Marcaciones son opcionales y no bloquean
     const [promRows, salaRows, stockRows, b2bRows, marcRows, capacRows, preciosRows, training] = await Promise.all([
-      sheetValues(tokenSheet, configSheetId, "Promotores!A:Z"),
+      sheetValues(tokenSheet, configSheetId, "Promotores!A:ZZ"),
       sheetValues(tokenSheet, configSheetId, "Salas!A:Z"),
       sheetValues(tokenSheet, configSheetId, "Stock!A:Z"),
       salesSheetId ? sheetValues(tokenSheet, salesSheetId, "VentasB2B!A:O").catch(()=>[]) : Promise.resolve([]),
