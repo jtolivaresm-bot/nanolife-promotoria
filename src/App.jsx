@@ -3,7 +3,7 @@ import {
   Home, MapPin, GraduationCap, Clock, LogIn, LogOut,
   CheckCircle2, Circle, Camera, Mic, Square, Trash2, X,
   AlertCircle, Store, FileText, Video, Image as ImageIcon,
-  ChevronRight, RefreshCw, Crown, ShieldCheck, Phone, Maximize2
+  ChevronRight, RefreshCw, Crown, ShieldCheck, Phone, Maximize2, Search
 } from "lucide-react";
 
 const STORAGE_KEY = "nanolife_v5";
@@ -191,6 +191,12 @@ function saveSheetQueue(q){ try{localStorage.setItem(SHEET_QUEUE_KEY, JSON.strin
 const CAPAC_SEEN_KEY = "nanolife_capac_seen";
 function loadCapacSeen(){ try{return JSON.parse(localStorage.getItem(CAPAC_SEEN_KEY))||{};}catch{return {};} }
 function saveCapacSeen(m){ try{localStorage.setItem(CAPAC_SEEN_KEY, JSON.stringify(m));}catch{} }
+
+// Ids de promotores que ingresaron recientemente en este dispositivo (más reciente primero).
+// Sirve para mostrarlos arriba en la lista de ingreso (útil en dispositivos compartidos).
+const RECENT_PIDS_KEY = "nanolife_recent_pids";
+function loadRecentPids(){ try{return JSON.parse(localStorage.getItem(RECENT_PIDS_KEY))||[];}catch{return [];} }
+function pushRecentPid(id){ try{ if(!id||id==="udemo")return; const cur=loadRecentPids().filter(x=>x!==id); cur.unshift(id); localStorage.setItem(RECENT_PIDS_KEY, JSON.stringify(cur.slice(0,10))); }catch{} }
 
 // Igual que queueUpload: encola la fila para Sheets y reintenta, en vez de perder
 // silenciosamente la marcación/cierre si el fetch falla o el servidor responde error.
@@ -515,8 +521,9 @@ export default function App() {
     if(d) setDb({config:{...DEFAULT_CONFIG,...d.config},records:d.records||{},training:d.training||SEED_TRAINING});
     setReady(true);
 
-    // Load config from Google in background
-    fetch("/.netlify/functions/config-reader")
+    // Load config from Google in background. El ?t= rompe la caché (la respuesta se cachea
+    // 5 min): sin esto, promotores/salas nuevos tardaban en aparecer en la app.
+    fetch("/.netlify/functions/config-reader?t="+Date.now())
       .then(r=>r.ok ? r.json() : Promise.reject(r.status))
       .then(({promotores, salas, stock, training, ventasB2B, marcaciones, capacitacion, precios})=>{
         if(promotores?.length) {
@@ -635,7 +642,7 @@ export default function App() {
         <LoginScreen
           promotores={promotoresState}
           salas={SALAS}
-          onLogin={id=>{setPid(id); localStorage.setItem("nanolife_pid",id);}}
+          onLogin={id=>{setPid(id); localStorage.setItem("nanolife_pid",id); pushRecentPid(id);}}
           configVersion={configVersion}
           configLoading={promotoresState.length===0}/>
       </div>
@@ -2126,8 +2133,23 @@ function LoginScreen({ promotores, salas, onLogin, configVersion, configLoading 
   const [rut, setRut] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [query, setQuery] = useState("");
 
   const selProm = promotores.find(p=>p.id===selId);
+
+  // Normaliza para buscar sin tildes ni mayúsculas.
+  const norm = s => (s||"").toString().normalize("NFD").replace(/[̀-ͯ]/g,"").toLowerCase().trim();
+  const recientes = useMemo(()=>loadRecentPids(),[]);
+  // Lista de ingreso: filtrada por búsqueda, con los ingresos recientes arriba; demo al final.
+  const lista = useMemo(()=>{
+    const q = norm(query);
+    const match = p => !q || norm(p.nombre).includes(q);
+    const rk = id => { const i = recientes.indexOf(id); return i<0 ? 9999 : i; };
+    const reales = promotores
+      .filter(p => p.id!=="udemo" && !p._esDemo && match(p))
+      .sort((a,b) => rk(a.id) - rk(b.id)); // sort estable: no-recientes mantienen su orden
+    return match(PROMOTOR_DEMO) ? [...reales, PROMOTOR_DEMO] : reales;
+  },[promotores, query, recientes]);
 
   function handleSelectNombre(id) {
     setSelId(id); setRut(""); setError(""); setStep("rut");
@@ -2159,16 +2181,36 @@ function LoginScreen({ promotores, salas, onLogin, configVersion, configLoading 
         {step==="nombre" && (
           <>
             <div style={{fontFamily:"'Segoe UI',system-ui",fontWeight:700,fontSize:22,color:"var(--ink)",marginBottom:6}}>¡Hola! 👋</div>
-            <div className="muted" style={{fontSize:14,marginBottom:20}}>Selecciona tu nombre para continuar.</div>
+            <div className="muted" style={{fontSize:14,marginBottom:16}}>Busca y selecciona tu nombre para continuar.</div>
+
+            {/* Buscador */}
+            <div style={{position:"relative",marginBottom:16}}>
+              <Search size={18} style={{position:"absolute",left:14,top:"50%",transform:"translateY(-50%)",color:"var(--muted)",pointerEvents:"none"}}/>
+              <input className="inp" type="text" placeholder="Buscar mi nombre…" value={query}
+                onChange={e=>setQuery(e.target.value)} style={{paddingLeft:42,paddingRight:40}}/>
+              {query && (
+                <button onClick={()=>setQuery("")} aria-label="Limpiar"
+                  style={{position:"absolute",right:8,top:"50%",transform:"translateY(-50%)",background:"var(--bg)",border:"none",borderRadius:8,width:30,height:30,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}>
+                  <X size={15}/>
+                </button>
+              )}
+            </div>
+
             {configLoading && (
               <div style={{textAlign:"center",padding:"32px 0",color:"var(--muted)"}}>
                 <RefreshCw size={28} className="spin" style={{color:"var(--teal)",marginBottom:12}}/>
                 <div style={{fontSize:14}}>Cargando promotores…</div>
               </div>
             )}
-            {[...promotores.filter(p=>p.id!=="udemo" && !p._esDemo), PROMOTOR_DEMO].map((p,idx,arr)=>{
+            {!configLoading && lista.length===0 && (
+              <div className="muted" style={{textAlign:"center",padding:"28px 0",fontSize:14}}>
+                No encontramos “{query}”. Revisa cómo está escrito tu nombre o avisa a tu coordinador/a.
+              </div>
+            )}
+            {lista.map((p,idx)=>{
               const sl = salas.find(s=>s.id===getSalaIdParaHoy(p));
               const isDemo = p._esDemo || p.id==="udemo";
+              const esReciente = !isDemo && recientes.includes(p.id);
               const showSep = isDemo && idx > 0;
               return (
                 <div key={p.id}>
@@ -2180,12 +2222,19 @@ function LoginScreen({ promotores, salas, onLogin, configVersion, configLoading 
                     </div>
                   )}
                   <button onClick={()=>handleSelectNombre(p.id)}
-                    style={{width:"100%",background:isDemo?"#FFF8E7":"var(--surface)",border:isDemo?"1.5px dashed #F5A623":"1px solid var(--line)",borderRadius:16,padding:"14px 16px",display:"flex",alignItems:"center",gap:12,cursor:"pointer",textAlign:"left",marginBottom:10,boxShadow:"0 1px 3px rgba(11,42,45,.06)"}}>
+                    style={{width:"100%",background:isDemo?"#FFF8E7":"var(--surface)",border:isDemo?"1.5px dashed #F5A623":esReciente?"1.5px solid var(--mint)":"1px solid var(--line)",borderRadius:16,padding:"14px 16px",display:"flex",alignItems:"center",gap:12,cursor:"pointer",textAlign:"left",marginBottom:10,boxShadow:"0 1px 3px rgba(11,42,45,.06)"}}>
                     <div style={{background:isDemo?"#FEF3E2":"#E4F4F1",color:isDemo?"#92610A":"var(--teal)",border:isDemo?"1.5px solid #F5A623":"1.5px solid var(--mint)",width:44,height:44,flexShrink:0,borderRadius:"50%",display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700,fontSize:15}}>
                       {isDemo ? "⭐" : p.nombre.split(" ").map(w=>w[0]).join("").slice(0,2)}
                     </div>
-                    <div style={{flex:1}}>
-                      <div style={{fontWeight:700,fontSize:15,color:isDemo?"#92610A":"var(--ink)"}}>{p.nombre}</div>
+                    <div style={{flex:1,minWidth:0}}>
+                      <div style={{display:"flex",alignItems:"center",gap:6}}>
+                        <div style={{fontWeight:700,fontSize:15,color:isDemo?"#92610A":"var(--ink)"}}>{p.nombre}</div>
+                        {esReciente && (
+                          <span style={{display:"inline-flex",alignItems:"center",gap:3,fontSize:10,fontWeight:700,color:"var(--teal-d)",background:"#E4F4F1",borderRadius:6,padding:"2px 6px"}}>
+                            <Clock size={10}/> reciente
+                          </span>
+                        )}
+                      </div>
                       <div className="muted" style={{fontSize:12,marginTop:2,display:"flex",alignItems:"center",gap:4}}>
                         <Store size={11}/>
                         {sl ? sl.nombre.replace("Hiper Lider - ","").replace("Lider Express - ","") : isDemo ? "Sala de ejemplo · Santiago" : "Sin jornada hoy"}
